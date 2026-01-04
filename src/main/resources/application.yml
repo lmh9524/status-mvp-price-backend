@@ -13,6 +13,15 @@ app:
   cache:
     priceTtlSeconds: ${PRICE_CACHE_TTL_SECONDS:120}
     requestTtlSeconds: ${REQUEST_CACHE_TTL_SECONDS:30}
+  bsc:
+    rpcUrl: ${BSC_RPC_URL:}
+  dex:
+    pancake:
+      routerAddress: ${PANCAKE_ROUTER_V2_ADDRESS:0x10ED43C718714eb63d5aA57B78B54704E256024E}
+    veilx:
+      address: ${VEILX_CONTRACT_ADDRESS:}
+    usdt:
+      address: ${BSC_USDT_CONTRACT_ADDRESS:0x55d398326f99059fF775485246999027B3197955}
   coingecko:
     # Additional/override symbol->CoinGecko id mappings.
     # Format: SYMBOL=id,SYMBOL2=id2

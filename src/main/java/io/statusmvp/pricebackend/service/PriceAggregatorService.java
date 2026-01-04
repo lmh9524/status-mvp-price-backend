@@ -26,6 +26,7 @@ public class PriceAggregatorService {
   private final BinanceClient binance;
   private final RedisCache cache;
   private final CoinGeckoIdResolver coinGeckoIds;
+  private final VeilxDexPriceService veilxDex;
   private final ObjectMapper mapper = new ObjectMapper();
 
   private final long priceTtlSeconds;
@@ -37,6 +38,7 @@ public class PriceAggregatorService {
       BinanceClient binance,
       RedisCache cache,
       CoinGeckoIdResolver coinGeckoIds,
+      VeilxDexPriceService veilxDex,
       @Value("${app.cache.priceTtlSeconds:120}") long priceTtlSeconds,
       @Value("${app.cache.requestTtlSeconds:30}") long requestTtlSeconds) {
     this.coinGecko = coinGecko;
@@ -44,6 +46,7 @@ public class PriceAggregatorService {
     this.binance = binance;
     this.cache = cache;
     this.coinGeckoIds = coinGeckoIds;
+    this.veilxDex = veilxDex;
     this.priceTtlSeconds = priceTtlSeconds;
     this.requestTtlSeconds = requestTtlSeconds;
   }
@@ -98,6 +101,18 @@ public class PriceAggregatorService {
         cache.set(key, mapper.writeValueAsString(q), priceTtlSeconds);
       } catch (Exception ignored) {}
       return q;
+    }
+
+    // VEILX on-chain DEX pricing (BSC PancakeSwap V2): 1 VEILX ~ X USDT (assume USDT~USD)
+    if ("usd".equals(currency) && "VEILX".equals(symbol) && veilxDex != null && veilxDex.isEnabled()) {
+      Double p = veilxDex.fetchVeilxUsdPrice().orElse(null);
+      if (p != null) {
+        PriceQuote q = new PriceQuote(symbol, p, "usd", ts, "pancakeswap_v2", null, null);
+        try {
+          cache.set(key, mapper.writeValueAsString(q), priceTtlSeconds);
+        } catch (Exception ignored) {}
+        return q;
+      }
     }
 
     // 1) CoinGecko Pro (symbol -> id)
@@ -162,6 +177,19 @@ public class PriceAggregatorService {
       if (!got.isEmpty()) {
         prices.putAll(got);
         source = "coingecko";
+      }
+    }
+
+    // 1b) VEILX special-case (BSC) when CoinGecko doesn't have contract price
+    if ("usd".equals(cur) && chainId == 56 && veilxDex != null && veilxDex.isEnabled()) {
+      String veilxAddr = veilxDex.veilxContractLower();
+      if (!veilxAddr.isBlank() && addrs.contains(veilxAddr)) {
+        Double v = veilxDex.fetchVeilxUsdPrice().orElse(null);
+        if (v != null) {
+          // Only fill VEILX contract. Others remain null.
+          prices.put(veilxAddr, v);
+          if (source == null) source = "pancakeswap_v2";
+        }
       }
     }
 

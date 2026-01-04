@@ -1,0 +1,12 @@
+target/
+.idea/
+.vscode/
+
+# local env
+env.local
+
+# logs
+*.log
+logs/
+
+

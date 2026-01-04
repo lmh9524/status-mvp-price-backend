@@ -18,6 +18,21 @@ This service provides token USD prices for `status-mvp` without exposing thirdâ€
 - `GET /api/v1/prices/by-contract?chainId=10&contractAddresses=0x...,0x...&currency=usd`
 - `GET /health`
 
+## VEILX (BSC) on-chain pricing
+
+CoinGecko may not list VEILX. This service can price **VEILX** directly from BSC by calling PancakeSwap V2 Router
+`getAmountsOut(1 VEILX -> USDT)` via `eth_call` (treating `USDTâ‰ˆUSD` for MVP).
+
+Enable by setting:
+
+- `BSC_RPC_URL` (BSC mainnet RPC endpoint)
+- `VEILX_CONTRACT_ADDRESS` (VEILX token contract on BSC)
+
+Optional overrides:
+
+- `PANCAKE_ROUTER_V2_ADDRESS` (default is PancakeSwap V2 router)
+- `BSC_USDT_CONTRACT_ADDRESS` (default is BSC USDT)
+
 ## Local run (Docker)
 
 Create an env file (see `env.example`) then:
