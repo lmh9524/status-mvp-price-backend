@@ -11,6 +11,8 @@ import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
 
 @RestController
 @RequestMapping(path = "/api/v1", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -23,7 +25,7 @@ public class PriceController {
   }
 
   @GetMapping("/prices")
-  public List<PriceQuote> getPrices(
+  public Mono<List<PriceQuote>> getPrices(
       @RequestParam("symbols") @NotBlank String symbols,
       @RequestParam(value = "currency", required = false, defaultValue = "usd") String currency) {
     List<String> list =
@@ -31,11 +33,12 @@ public class PriceController {
             .map(String::trim)
             .filter(s -> !s.isBlank())
             .toList();
-    return prices.getPrices(list, currency);
+    return Mono.fromCallable(() -> prices.getPrices(list, currency))
+        .subscribeOn(Schedulers.boundedElastic());
   }
 
   @GetMapping("/prices/by-contract")
-  public List<PriceQuote> getPricesByContract(
+  public Mono<List<PriceQuote>> getPricesByContract(
       @RequestParam("chainId") int chainId,
       @RequestParam("contractAddresses") @NotBlank String contractAddresses,
       @RequestParam(value = "currency", required = false, defaultValue = "usd") String currency) {
@@ -44,7 +47,8 @@ public class PriceController {
             .map(String::trim)
             .filter(s -> !s.isBlank())
             .toList();
-    return prices.getPricesByContract(chainId, list, currency);
+    return Mono.fromCallable(() -> prices.getPricesByContract(chainId, list, currency))
+        .subscribeOn(Schedulers.boundedElastic());
   }
 }
 
