@@ -1,0 +1,13 @@
+io\statusmvp\pricebackend\controller\HealthController.class
+io\statusmvp\pricebackend\service\RedisCache.class
+io\statusmvp\pricebackend\controller\PriceController.class
+io\statusmvp\pricebackend\client\CoinGeckoClient.class
+io\statusmvp\pricebackend\client\CoinMarketCapClient.class
+io\statusmvp\pricebackend\service\PriceAggregatorService$1.class
+io\statusmvp\pricebackend\service\PriceAggregatorService.class
+io\statusmvp\pricebackend\config\AppConfig.class
+io\statusmvp\pricebackend\model\PriceQuote.class
+io\statusmvp\pricebackend\service\PriceAggregatorService$2.class
+io\statusmvp\pricebackend\client\BinanceClient.class
+io\statusmvp\pricebackend\PriceBackendApplication.class
+io\statusmvp\pricebackend\util\PriceMappings.class

@@ -1,0 +1,25 @@
+services:
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  price-backend:
+    build:
+      context: .
+    restart: unless-stopped
+    depends_on:
+      - redis
+    environment:
+      PORT: ${PORT:-3003}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
+      COINGECKO_PRO_API_KEY: ${COINGECKO_PRO_API_KEY:-}
+      COINMARKETCAP_API_KEY: ${COINMARKETCAP_API_KEY:-}
+      PRICE_CACHE_TTL_SECONDS: ${PRICE_CACHE_TTL_SECONDS:-120}
+      REQUEST_CACHE_TTL_SECONDS: ${REQUEST_CACHE_TTL_SECONDS:-30}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-*}
+    ports:
+      - "${PORT:-3003}:${PORT:-3003}"
+
+
