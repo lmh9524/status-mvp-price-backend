@@ -26,15 +26,14 @@ public class CoinMarketCapClient {
   public Optional<Double> fetchUsdPriceBySymbol(String symbol) {
     if (apiKey.isBlank() || symbol == null || symbol.isBlank()) return Optional.empty();
 
-    URI uri =
-        UriComponentsBuilder.fromUriString(
-                "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest")
-            .queryParam("symbol", symbol.toUpperCase())
-            .queryParam("convert", "USD")
-            .build(true)
-            .toUri();
-
     try {
+      URI uri =
+          UriComponentsBuilder.fromUriString(
+                  "https://pro-api.coinmarketcap.com/v1/cryptocurrency/quotes/latest")
+              .queryParam("symbol", symbol.toUpperCase())
+              .queryParam("convert", "USD")
+              .build(true)
+              .toUri();
       JsonNode root =
           webClient
               .get()

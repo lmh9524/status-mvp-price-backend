@@ -14,14 +14,9 @@ WorkingDirectory=/home/ec2-user/status-mvp/status-mvp-price-backend
 # Load secrets / env vars from a root-owned file:
 EnvironmentFile=/etc/status-mvp-price-backend/status-mvp-price-backend.env
 
-# Java runtime (Amazon Corretto 17 on Amazon Linux 2023)
-Environment=JAVA_BIN=/usr/lib/jvm/java-17-amazon-corretto.x86_64/bin/java
-
-# Jar path (you can also point this to a stable symlink like /opt/status-mvp-price-backend/app.jar)
-Environment=APP_JAR=/home/ec2-user/status-mvp/status-mvp-price-backend/target/status-mvp-price-backend-0.0.1.jar
-
-# Start
-ExecStart=${JAVA_BIN} -jar ${APP_JAR}
+# Start (use absolute paths; avoids systemd env expansion differences)
+# If your paths differ, edit this line (and/or WorkingDirectory above).
+ExecStart=/usr/lib/jvm/java-17-amazon-corretto.x86_64/bin/java -jar /home/ec2-user/status-mvp/status-mvp-price-backend/target/status-mvp-price-backend-0.0.1.jar
 
 # Restart policy
 Restart=on-failure

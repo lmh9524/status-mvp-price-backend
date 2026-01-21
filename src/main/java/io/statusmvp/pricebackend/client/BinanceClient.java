@@ -23,13 +23,12 @@ public class BinanceClient {
     if (baseSymbol == null || baseSymbol.isBlank()) return Optional.empty();
     String symbol = baseSymbol.toUpperCase() + "USDT";
 
-    URI uri =
-        UriComponentsBuilder.fromUriString("https://api.binance.com/api/v3/ticker/price")
-            .queryParam("symbol", symbol)
-            .build(true)
-            .toUri();
-
     try {
+      URI uri =
+          UriComponentsBuilder.fromUriString("https://api.binance.com/api/v3/ticker/price")
+              .queryParam("symbol", symbol)
+              .build(true)
+              .toUri();
       JsonNode root =
           webClient
               .get()

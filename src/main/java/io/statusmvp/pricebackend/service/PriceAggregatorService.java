@@ -16,6 +16,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.regex.Pattern;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -31,6 +32,12 @@ public class PriceAggregatorService {
 
   private final long priceTtlSeconds;
   private final long requestTtlSeconds;
+
+  // Accept exchange-friendly symbols (Binance/CMC) to avoid URI encoding failures.
+  private static final Pattern SAFE_EXCHANGE_SYMBOL = Pattern.compile("^[A-Z0-9]{1,20}$");
+  // Some ecosystems use "USD₮" (USDT) or suffix digits like "USDT0". We normalize those for lookup.
+  private static final Pattern STABLE_WITH_SUFFIX_DIGITS =
+      Pattern.compile("^(USDC|USDT|DAI|BUSD|TUSD|USDP|GUSD|FRAX|LUSD|SUSD|USDD|USDG|PYUSD|FDUSD|USDE)\\d+$");
 
   public PriceAggregatorService(
       CoinGeckoClient coinGecko,
@@ -55,6 +62,7 @@ public class PriceAggregatorService {
     String cur = normalizeCurrency(currency);
     List<String> normSymbols =
         symbols.stream()
+            // Preserve requested symbol shape (uppercased) in response/caching.
             .map(s -> s == null ? "" : s.trim().toUpperCase(Locale.ROOT))
             .filter(s -> !s.isBlank())
             .distinct()
@@ -85,6 +93,9 @@ public class PriceAggregatorService {
   }
 
   private PriceQuote getSingleSymbolPrice(String symbol, String currency, long ts) {
+    // Use requested symbol as the response key, but normalize for lookup (providers often require ASCII).
+    String lookup = normalizeLookupSymbol(symbol);
+
     // Per-symbol cache
     String key = "price:symbol:" + symbol + ":" + currency;
     Optional<String> cached = cache.get(key);
@@ -95,7 +106,7 @@ public class PriceAggregatorService {
     }
 
     // Stablecoin fallback
-    if ("usd".equals(currency) && PriceMappings.STABLECOINS.contains(symbol)) {
+    if ("usd".equals(currency) && !lookup.isBlank() && PriceMappings.STABLECOINS.contains(lookup)) {
       PriceQuote q = new PriceQuote(symbol, 1.0, "usd", ts, "stablecoin_fallback", null, null);
       try {
         cache.set(key, mapper.writeValueAsString(q), priceTtlSeconds);
@@ -119,7 +130,7 @@ public class PriceAggregatorService {
     Double price = null;
     String source = null;
     if (coinGecko.isEnabled()) {
-      String id = coinGeckoIds.resolve(symbol);
+      String id = coinGeckoIds.resolve(lookup);
       if (id != null) {
         price = coinGecko.fetchSimplePriceUsd(id).orElse(null);
         if (price != null) source = "coingecko";
@@ -127,14 +138,14 @@ public class PriceAggregatorService {
     }
 
     // 2) CoinMarketCap
-    if (price == null && cmc.isEnabled()) {
-      price = cmc.fetchUsdPriceBySymbol(symbol).orElse(null);
+    if (price == null && cmc.isEnabled() && isSafeExchangeSymbol(lookup)) {
+      price = cmc.fetchUsdPriceBySymbol(lookup).orElse(null);
       if (price != null) source = "coinmarketcap";
     }
 
     // 3) Binance (USDT pair)
-    if (price == null) {
-      price = binance.fetchUsdPriceViaUsdtPair(symbol).orElse(null);
+    if (price == null && isSafeExchangeSymbol(lookup)) {
+      price = binance.fetchUsdPriceViaUsdtPair(lookup).orElse(null);
       if (price != null) source = "binance";
     }
 
@@ -143,6 +154,40 @@ public class PriceAggregatorService {
       cache.set(key, mapper.writeValueAsString(q), priceTtlSeconds);
     } catch (Exception ignored) {}
     return q;
+  }
+
+  private static boolean isSafeExchangeSymbol(String symbol) {
+    if (symbol == null || symbol.isBlank()) return false;
+    return SAFE_EXCHANGE_SYMBOL.matcher(symbol).matches();
+  }
+
+  /**
+   * Normalize user-provided symbols to something safe for providers.
+   *
+   * <p>Important: we keep the original requested symbol in the response, but use this value for lookups.
+   */
+  private static String normalizeLookupSymbol(String rawUpper) {
+    if (rawUpper == null) return "";
+    String s = rawUpper.trim().toUpperCase(Locale.ROOT);
+    if (s.isBlank()) return "";
+
+    // Common bridged token suffixes: USDC.e -> USDC
+    if (s.endsWith(".E")) s = s.substring(0, s.length() - 2);
+
+    // Replace "₮" with "T" so "USD₮" behaves like "USDT" for stablecoin fallback / lookups.
+    if (s.indexOf('₮') >= 0) s = s.replace("₮", "T");
+
+    // Some lists append digits (e.g. USDT0). Strip digits for known stablecoins.
+    if (STABLE_WITH_SUFFIX_DIGITS.matcher(s).matches()) {
+      s = s.replaceAll("\\d+$", "");
+    }
+
+    // Provider-facing symbol must be ASCII-ish; if not safe, return empty to skip provider calls.
+    if (!SAFE_EXCHANGE_SYMBOL.matcher(s).matches()) {
+      return "";
+    }
+
+    return s;
   }
 
   public List<PriceQuote> getPricesByContract(int chainId, List<String> contractAddresses, String currency) {
