@@ -18,18 +18,32 @@ public class CoinGeckoClient {
   private static final Logger log = LoggerFactory.getLogger(CoinGeckoClient.class);
   private final WebClient webClient;
   private final String apiKey;
+  private final boolean allowPublic;
+  private final String baseUrl;
 
-  public CoinGeckoClient(WebClient webClient, @Value("${COINGECKO_PRO_API_KEY:}") String apiKey) {
+  public CoinGeckoClient(
+      WebClient webClient,
+      @Value("${COINGECKO_PRO_API_KEY:}") String apiKey,
+      @Value("${COINGECKO_ALLOW_PUBLIC:false}") boolean allowPublic) {
     this.webClient = webClient;
     this.apiKey = apiKey == null ? "" : apiKey.trim();
+    this.allowPublic = allowPublic;
+    // Prefer Pro API when key is provided; optionally fall back to the public API (rate-limited).
+    if (!this.apiKey.isBlank()) {
+      this.baseUrl = "https://pro-api.coingecko.com/api/v3";
+    } else if (this.allowPublic) {
+      this.baseUrl = "https://api.coingecko.com/api/v3";
+    } else {
+      this.baseUrl = "";
+    }
   }
 
   public boolean isEnabled() {
-    return !apiKey.isBlank();
+    return !baseUrl.isBlank();
   }
 
   public Optional<Double> fetchSimplePriceUsd(String coinId) {
-    if (apiKey.isBlank() || coinId == null || coinId.isBlank()) {
+    if (!isEnabled() || coinId == null || coinId.isBlank()) {
       if (log.isDebugEnabled()) {
         log.debug(
             "CoinGecko simple price skipped: apiKeyBlank={} coinId='{}'",
@@ -40,7 +54,7 @@ public class CoinGeckoClient {
     }
 
     URI uri =
-        UriComponentsBuilder.fromUriString("https://pro-api.coingecko.com/api/v3/simple/price")
+        UriComponentsBuilder.fromUriString(baseUrl + "/simple/price")
             .queryParam("ids", coinId)
             .queryParam("vs_currencies", "usd")
             .build(true)
@@ -51,7 +65,9 @@ public class CoinGeckoClient {
           webClient
               .get()
               .uri(uri)
-              .header("x-cg-pro-api-key", apiKey)
+              .headers(h -> {
+                if (!apiKey.isBlank()) h.set("x-cg-pro-api-key", apiKey);
+              })
               .retrieve()
               .bodyToMono(JsonNode.class)
               .timeout(Duration.ofSeconds(10))
@@ -80,7 +96,7 @@ public class CoinGeckoClient {
    */
   public Map<String, Double> fetchTokenPricesByContract(int chainId, String platformId, String addressesCsv) {
     Map<String, Double> out = new HashMap<>();
-    if (apiKey.isBlank() || platformId == null || platformId.isBlank()) {
+    if (!isEnabled() || platformId == null || platformId.isBlank()) {
       if (log.isDebugEnabled()) {
         log.debug(
             "CoinGecko token_price skipped: apiKeyBlank={} platformId='{}' addresses='{}'",
@@ -94,7 +110,7 @@ public class CoinGeckoClient {
 
     URI uri =
         UriComponentsBuilder.fromUriString(
-                "https://pro-api.coingecko.com/api/v3/simple/token_price/" + platformId)
+                baseUrl + "/simple/token_price/" + platformId)
             .queryParam("contract_addresses", addressesCsv)
             .queryParam("vs_currencies", "usd")
             .build(true)
@@ -105,7 +121,9 @@ public class CoinGeckoClient {
           webClient
               .get()
               .uri(uri)
-              .header("x-cg-pro-api-key", apiKey)
+              .headers(h -> {
+                if (!apiKey.isBlank()) h.set("x-cg-pro-api-key", apiKey);
+              })
               .retrieve()
               .bodyToMono(JsonNode.class)
               .timeout(Duration.ofSeconds(15))

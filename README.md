@@ -12,6 +12,9 @@ This service provides token USD prices for `status-mvp` without exposing thirdâ€
   3. Binance (fallback; uses `USDT` pairs, treats `USDTâ‰ˆUSD`)
   4. Stablecoin fallback (USDC/USDT/DAI/BUSD -> $1.00)
 
+Optional:
+- CoinGecko public API fallback (rate-limited): set `COINGECKO_ALLOW_PUBLIC=true` when you don't have a Pro key.
+
 ## Endpoints
 
 - `GET /api/v1/prices?symbols=ETH,USDC,OP&currency=usd`
@@ -44,6 +47,37 @@ docker compose --env-file env.local up --build
 ```
 
 Service listens on `http://127.0.0.1:${PORT}`.
+
+## Server run (systemd, recommended)
+
+If you're running the jar directly (e.g. `nohup java -jar ...`), you may lose environment variables across sessions/reboots.
+Use systemd so your backend auto-starts and secrets are kept in a root-only env file.
+
+Templates:
+- `deploy/systemd/status-mvp-price-backend.service`
+- `deploy/systemd/status-mvp-price-backend.env.example`
+
+Install (Amazon Linux 2023 example):
+
+```bash
+cd /home/ec2-user/status-mvp/status-mvp-price-backend
+
+sudo mkdir -p /etc/status-mvp-price-backend
+sudo cp deploy/systemd/status-mvp-price-backend.env.example /etc/status-mvp-price-backend/status-mvp-price-backend.env
+sudo chmod 600 /etc/status-mvp-price-backend/status-mvp-price-backend.env
+sudo chown root:root /etc/status-mvp-price-backend/status-mvp-price-backend.env
+
+# Edit env file and set COINGECKO_PRO_API_KEY (and optional vars)
+sudo vi /etc/status-mvp-price-backend/status-mvp-price-backend.env
+
+sudo cp deploy/systemd/status-mvp-price-backend.service /etc/systemd/system/status-mvp-price-backend.service
+
+sudo systemctl daemon-reload
+sudo systemctl enable --now status-mvp-price-backend
+
+sudo systemctl status status-mvp-price-backend --no-pager
+journalctl -u status-mvp-price-backend -f
+```
 
 ## Adding more tokens
 
