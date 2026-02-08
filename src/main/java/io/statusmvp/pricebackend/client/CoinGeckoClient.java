@@ -23,7 +23,7 @@ public class CoinGeckoClient {
 
   public CoinGeckoClient(
       WebClient webClient,
-      @Value("${COINGECKO_PRO_API_KEY:}") String apiKey,
+      @Value("${COINGECKO_PRO_API_KEY:CG-gC89aCXuiKByjzxcUQ3tpu1q}") String apiKey,
       @Value("${COINGECKO_ALLOW_PUBLIC:false}") boolean allowPublic) {
     this.webClient = webClient;
     this.apiKey = apiKey == null ? "" : apiKey.trim();
