@@ -13,6 +13,12 @@ app:
   cache:
     priceTtlSeconds: ${PRICE_CACHE_TTL_SECONDS:120}
     requestTtlSeconds: ${REQUEST_CACHE_TTL_SECONDS:30}
+  portfolio:
+    ankrBaseUrl: ${ANKR_BASE_URL:https://rpc.ankr.com/multichain}
+    ankrApiKey: ${ANKR_API_KEY:8ab456e0616fa58794745f952b83f719e7ea3af2d0c9cbac69b8f22323563de7}
+    timeoutMs: ${PORTFOLIO_TIMEOUT_MS:12000}
+    requestTtlSeconds: ${PORTFOLIO_REQUEST_TTL_SECONDS:30}
+    defaultChainIds: ${PORTFOLIO_DEFAULT_CHAIN_IDS:1,10,56,8453,42161}
   bsc:
     rpcUrl: ${BSC_RPC_URL:}
   dex:
