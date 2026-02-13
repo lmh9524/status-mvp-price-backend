@@ -47,8 +47,8 @@ public class AcrossBridgeDirectoryService {
       @Value("${app.bridge.across.timeoutMs:12000}") long timeoutMs,
       @Value("${app.bridge.across.chainsCacheTtlSeconds:300}") long chainsCacheTtlSeconds,
       @Value("${app.bridge.across.routesCacheTtlSeconds:60}") long routesCacheTtlSeconds,
-      @Value("${app.bridge.across.allowedChainIds:1,10,42161,8453}") String allowedChainIds,
-      @Value("${app.bridge.across.allowedTokenSymbols:ETH,USDC,USDT,DAI}") String allowedTokenSymbols) {
+      @Value("${app.bridge.across.allowedChainIds:1,10,42161,8453,56}") String allowedChainIds,
+      @Value("${app.bridge.across.allowedTokenSymbols:ETH,USDC,USDT,DAI,USDC-BNB,USDT-BNB}") String allowedTokenSymbols) {
     this.webClient = webClient;
     this.cache = cache;
     this.apiBaseUrl = (apiBaseUrl == null ? "" : apiBaseUrl.trim()).replaceAll("/+$", "");
@@ -62,9 +62,11 @@ public class AcrossBridgeDirectoryService {
 
   public BridgeAcrossDirectoryResponse getDirectory() {
     long now = Instant.now().toEpochMilli();
-    List<Integer> chainAllow = allowedChainIds.isEmpty() ? List.of(1, 10, 42161, 8453) : allowedChainIds;
+    List<Integer> chainAllow = allowedChainIds.isEmpty() ? List.of(1, 10, 42161, 8453, 56) : allowedChainIds;
     List<String> tokenAllowList =
-        allowedTokenSymbolsList.isEmpty() ? List.of("ETH", "USDC", "USDT", "DAI") : allowedTokenSymbolsList;
+        allowedTokenSymbolsList.isEmpty()
+            ? List.of("ETH", "USDC", "USDT", "DAI", "USDC-BNB", "USDT-BNB")
+            : allowedTokenSymbolsList;
     Set<String> tokenAllowSet =
         allowedTokenSymbolsSet.isEmpty() ? new HashSet<>(tokenAllowList) : allowedTokenSymbolsSet;
 
