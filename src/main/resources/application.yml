@@ -13,6 +13,14 @@ app:
   cache:
     priceTtlSeconds: ${PRICE_CACHE_TTL_SECONDS:120}
     requestTtlSeconds: ${REQUEST_CACHE_TTL_SECONDS:30}
+  bridge:
+    across:
+      apiBaseUrl: ${BRIDGE_ACROSS_API_BASE_URL:https://app.across.to/api}
+      timeoutMs: ${BRIDGE_ACROSS_TIMEOUT_MS:12000}
+      chainsCacheTtlSeconds: ${BRIDGE_ACROSS_CHAINS_CACHE_TTL_SECONDS:300}
+      routesCacheTtlSeconds: ${BRIDGE_ACROSS_ROUTES_CACHE_TTL_SECONDS:60}
+      allowedChainIds: ${BRIDGE_ACROSS_ALLOWED_CHAIN_IDS:1,10,42161,8453}
+      allowedTokenSymbols: ${BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS:ETH,USDC,USDT,DAI}
   portfolio:
     ankrBaseUrl: ${ANKR_BASE_URL:https://rpc.ankr.com/multichain}
     ankrApiKey: ${ANKR_API_KEY:8ab456e0616fa58794745f952b83f719e7ea3af2d0c9cbac69b8f22323563de7}

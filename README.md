@@ -19,6 +19,7 @@ Optional:
 
 - `GET /api/v1/prices?symbols=ETH,USDC,OP&currency=usd`
 - `GET /api/v1/prices/by-contract?chainId=10&contractAddresses=0x...,0x...&currency=usd`
+- `GET /api/v1/bridge/across/directory` (Across supported chains/routes proxy + allowlist downlink)
 - `GET /health`
 
 ## VEILX (BSC) on-chain pricing
@@ -105,5 +106,16 @@ Then your app can call:
 
 - Do **not** put API keys into the mobile app. Keep them in server environment variables.
 - This is a minimal MVP implementation; you can add auth, stricter rate limiting, and more price sources later.
+
+## Across Bridge directory proxy (dynamic routes)
+
+The mobile app can drive its Bridge UI from this backend so you can gradually enable/disable chains and tokens without
+shipping a new app build.
+
+Environment variables (see `env.example`):
+
+- `BRIDGE_ACROSS_ALLOWED_CHAIN_IDS` (comma-separated EIP-155 chainIds)
+- `BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS` (comma-separated symbols as returned by Across APIs)
+- `BRIDGE_ACROSS_CHAINS_CACHE_TTL_SECONDS`, `BRIDGE_ACROSS_ROUTES_CACHE_TTL_SECONDS`
 
 
