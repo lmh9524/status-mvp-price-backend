@@ -8,10 +8,10 @@ public record BridgeAcrossDirectoryResponse(
     List<Chain> chains,
     List<Route> routes) {
 
-  public record Allowlist(List<Integer> chainIds, List<String> tokenSymbols) {}
+  public record Allowlist(List<Long> chainIds, List<String> tokenSymbols) {}
 
   public record Chain(
-      int chainId,
+      long chainId,
       String name,
       String publicRpcUrl,
       String explorerUrl,
@@ -25,11 +25,10 @@ public record BridgeAcrossDirectoryResponse(
 
   public record Route(
       boolean isNative,
-      int originChainId,
-      int destinationChainId,
+      long originChainId,
+      long destinationChainId,
       String inputToken,
       String outputToken,
       String inputTokenSymbol,
       String outputTokenSymbol) {}
 }
-

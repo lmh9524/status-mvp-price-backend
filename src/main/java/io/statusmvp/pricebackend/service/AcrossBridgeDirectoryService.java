@@ -10,6 +10,7 @@ import java.net.URI;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
@@ -28,6 +29,19 @@ public class AcrossBridgeDirectoryService {
   private static final String CACHE_KEY_CHAINS = "bridge:across:chains";
   private static final String CACHE_KEY_ROUTES = "bridge:across:available-routes";
 
+  private enum AllowlistMode {
+    STRICT,
+    FULL;
+
+    static AllowlistMode parse(String raw) {
+      if (raw == null) return STRICT;
+      String v = raw.trim().toUpperCase(Locale.ROOT);
+      if (v.isBlank()) return STRICT;
+      if ("FULL".equals(v) || "ALL".equals(v)) return FULL;
+      return STRICT;
+    }
+  }
+
   private final WebClient webClient;
   private final RedisCache cache;
   private final ObjectMapper mapper = new ObjectMapper();
@@ -36,7 +50,8 @@ public class AcrossBridgeDirectoryService {
   private final Duration timeout;
   private final long chainsCacheTtlSeconds;
   private final long routesCacheTtlSeconds;
-  private final List<Integer> allowedChainIds;
+  private final AllowlistMode allowlistMode;
+  private final List<Long> allowedChainIds;
   private final List<String> allowedTokenSymbolsList;
   private final Set<String> allowedTokenSymbolsSet;
 
@@ -47,6 +62,7 @@ public class AcrossBridgeDirectoryService {
       @Value("${app.bridge.across.timeoutMs:12000}") long timeoutMs,
       @Value("${app.bridge.across.chainsCacheTtlSeconds:300}") long chainsCacheTtlSeconds,
       @Value("${app.bridge.across.routesCacheTtlSeconds:60}") long routesCacheTtlSeconds,
+      @Value("${app.bridge.across.allowlistMode:STRICT}") String allowlistMode,
       @Value("${app.bridge.across.allowedChainIds:1,10,42161,8453,56}") String allowedChainIds,
       @Value("${app.bridge.across.allowedTokenSymbols:ETH,USDC,USDT,DAI,USDC-BNB,USDT-BNB}") String allowedTokenSymbols) {
     this.webClient = webClient;
@@ -55,6 +71,7 @@ public class AcrossBridgeDirectoryService {
     this.timeout = Duration.ofMillis(Math.max(1000L, timeoutMs));
     this.chainsCacheTtlSeconds = Math.max(5L, chainsCacheTtlSeconds);
     this.routesCacheTtlSeconds = Math.max(5L, routesCacheTtlSeconds);
+    this.allowlistMode = AllowlistMode.parse(allowlistMode);
     this.allowedChainIds = parseChainIds(allowedChainIds);
     this.allowedTokenSymbolsList = parseSymbolsUpperList(allowedTokenSymbols);
     this.allowedTokenSymbolsSet = new HashSet<>(allowedTokenSymbolsList);
@@ -62,7 +79,37 @@ public class AcrossBridgeDirectoryService {
 
   public BridgeAcrossDirectoryResponse getDirectory() {
     long now = Instant.now().toEpochMilli();
-    List<Integer> chainAllow = allowedChainIds.isEmpty() ? List.of(1, 10, 42161, 8453, 56) : allowedChainIds;
+    if (allowlistMode == AllowlistMode.FULL) {
+      List<Chain> chains = fetchAndFilterChains(null, null);
+      List<Route> routes = fetchAndFilterRoutes(null, null);
+
+      List<Long> chainIds = new ArrayList<>();
+      Set<Long> chainSeen = new HashSet<>();
+      for (Chain c : chains) {
+        long id = c.chainId();
+        if (id > 0 && chainSeen.add(id)) chainIds.add(id);
+      }
+
+      Set<String> tokenSymbolsSet = new HashSet<>();
+      for (Route r : routes) {
+        String in = r.inputTokenSymbol();
+        String out = r.outputTokenSymbol();
+        if (in != null && !in.isBlank()) tokenSymbolsSet.add(upper(in));
+        if (out != null && !out.isBlank()) tokenSymbolsSet.add(upper(out));
+      }
+      for (Chain c : chains) {
+        for (Token t : c.inputTokens()) tokenSymbolsSet.add(upper(t.symbol()));
+        for (Token t : c.outputTokens()) tokenSymbolsSet.add(upper(t.symbol()));
+      }
+      List<String> tokenSymbols = new ArrayList<>(tokenSymbolsSet);
+      Collections.sort(tokenSymbols);
+
+      return new BridgeAcrossDirectoryResponse(
+          now, new BridgeAcrossDirectoryResponse.Allowlist(chainIds, tokenSymbols), chains, routes);
+    }
+
+    List<Long> chainAllow =
+        allowedChainIds.isEmpty() ? List.of(1L, 10L, 42161L, 8453L, 56L) : allowedChainIds;
     List<String> tokenAllowList =
         allowedTokenSymbolsList.isEmpty()
             ? List.of("ETH", "USDC", "USDT", "DAI", "USDC-BNB", "USDT-BNB")
@@ -77,7 +124,7 @@ public class AcrossBridgeDirectoryService {
         now, new BridgeAcrossDirectoryResponse.Allowlist(chainAllow, tokenAllowList), chains, routes);
   }
 
-  private List<Chain> fetchAndFilterChains(List<Integer> chainAllow, Set<String> tokenAllow) {
+  private List<Chain> fetchAndFilterChains(List<Long> chainAllow, Set<String> tokenAllow) {
     if (apiBaseUrl.isBlank()) return List.of();
     String url = apiBaseUrl + "/chains";
 
@@ -86,9 +133,9 @@ public class AcrossBridgeDirectoryService {
 
     List<Chain> out = new ArrayList<>();
     for (JsonNode chain : root) {
-      int chainId = chain.path("chainId").asInt(0);
+      long chainId = chain.path("chainId").asLong(0L);
       if (chainId <= 0) continue;
-      if (!chainAllow.contains(chainId)) continue;
+      if (chainAllow != null && !chainAllow.isEmpty() && !chainAllow.contains(chainId)) continue;
 
       String name = chain.path("name").asText(null);
       String publicRpcUrl = chain.path("publicRpcUrl").asText(null);
@@ -120,7 +167,7 @@ public class AcrossBridgeDirectoryService {
     return out;
   }
 
-  private List<Route> fetchAndFilterRoutes(List<Integer> chainAllow, Set<String> tokenAllow) {
+  private List<Route> fetchAndFilterRoutes(List<Long> chainAllow, Set<String> tokenAllow) {
     if (apiBaseUrl.isBlank()) return List.of();
     String url = apiBaseUrl + "/available-routes";
 
@@ -129,15 +176,20 @@ public class AcrossBridgeDirectoryService {
 
     List<Route> out = new ArrayList<>();
     for (JsonNode route : root) {
-      int originChainId = route.path("originChainId").asInt(0);
-      int destinationChainId = route.path("destinationChainId").asInt(0);
+      long originChainId = route.path("originChainId").asLong(0L);
+      long destinationChainId = route.path("destinationChainId").asLong(0L);
       if (originChainId <= 0 || destinationChainId <= 0) continue;
-      if (!chainAllow.contains(originChainId) || !chainAllow.contains(destinationChainId)) continue;
+      if (chainAllow != null && !chainAllow.isEmpty()) {
+        if (!chainAllow.contains(originChainId) || !chainAllow.contains(destinationChainId)) continue;
+      }
 
       String originTokenSymbol = upper(route.path("originTokenSymbol").asText(""));
       String destinationTokenSymbol = upper(route.path("destinationTokenSymbol").asText(""));
       if (originTokenSymbol.isBlank() || destinationTokenSymbol.isBlank()) continue;
-      if (!tokenAllow.contains(originTokenSymbol) || !tokenAllow.contains(destinationTokenSymbol)) continue;
+      if (tokenAllow != null && !tokenAllow.isEmpty()) {
+        if (!tokenAllow.contains(originTokenSymbol) || !tokenAllow.contains(destinationTokenSymbol))
+          continue;
+      }
 
       String originToken = route.path("originToken").asText(null);
       String destinationToken = route.path("destinationToken").asText(null);
@@ -195,7 +247,7 @@ public class AcrossBridgeDirectoryService {
     for (JsonNode t : tokensNode) {
       String symbol = upper(t.path("symbol").asText(""));
       if (symbol.isBlank()) continue;
-      if (!tokenAllow.contains(symbol)) continue;
+      if (tokenAllow != null && !tokenAllow.isEmpty() && !tokenAllow.contains(symbol)) continue;
 
       String address = t.path("address").asText(null);
       String name = t.path("name").asText(null);
@@ -208,15 +260,16 @@ public class AcrossBridgeDirectoryService {
     return out;
   }
 
-  private static List<Integer> parseChainIds(String raw) {
+  private static List<Long> parseChainIds(String raw) {
     if (raw == null || raw.isBlank()) return List.of();
-    List<Integer> out = new ArrayList<>();
+    List<Long> out = new ArrayList<>();
+    Set<Long> seen = new HashSet<>();
     for (String part : raw.split(",")) {
       String s = part.trim();
       if (s.isBlank()) continue;
       try {
-        int id = Integer.parseInt(s);
-        if (id > 0 && !out.contains(id)) out.add(id);
+        long id = Long.parseLong(s);
+        if (id > 0 && seen.add(id)) out.add(id);
       } catch (NumberFormatException ignored) {
         // ignore invalid item
       }
