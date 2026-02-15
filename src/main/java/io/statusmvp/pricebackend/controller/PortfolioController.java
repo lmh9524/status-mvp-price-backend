@@ -1,6 +1,7 @@
 package io.statusmvp.pricebackend.controller;
 
 import io.statusmvp.pricebackend.model.PortfolioSnapshot;
+import io.statusmvp.pricebackend.model.PortfolioSnapshotV2;
 import io.statusmvp.pricebackend.service.PortfolioAggregatorService;
 import jakarta.validation.constraints.NotBlank;
 import java.util.List;
@@ -31,5 +32,18 @@ public class PortfolioController {
     return Mono.fromCallable(() -> portfolio.getPortfolio(address, parsed))
         .subscribeOn(Schedulers.boundedElastic());
   }
-}
 
+  @GetMapping("/portfolio/snapshot")
+  public Mono<PortfolioSnapshotV2> getPortfolioSnapshotV2(
+      @RequestParam("address") @NotBlank String address,
+      @RequestParam(value = "chainIds", required = false) String chainIds,
+      @RequestParam(value = "currency", required = false, defaultValue = "usd") String currency,
+      @RequestParam(value = "minUsd", required = false) Double minUsd,
+      @RequestParam(value = "includeZero", required = false) Boolean includeZero,
+      @RequestParam(value = "limit", required = false) Integer limit) {
+    List<Integer> parsed = portfolio.parseChainIds(chainIds);
+    return Mono.fromCallable(
+            () -> portfolio.getPortfolioSnapshotV2(address, parsed, currency, minUsd, includeZero, limit))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+}
