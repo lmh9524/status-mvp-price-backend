@@ -27,15 +27,17 @@ public class XOAuthClient {
 
   public String buildAuthorizeUrl(String state, String codeChallenge) {
     AuthProperties.X x = authProperties.getX();
+    String scope = String.join(" ", x.scopeList());
     return UriComponentsBuilder.fromUriString(x.getAuthorizeEndpoint())
         .queryParam("response_type", "code")
         .queryParam("client_id", x.getClientId())
         .queryParam("redirect_uri", x.getRedirectUri())
-        .queryParam("scope", x.getScopes())
+        .queryParam("scope", scope)
         .queryParam("state", state)
         .queryParam("code_challenge", codeChallenge)
         .queryParam("code_challenge_method", "S256")
-        .build(true)
+        .build()
+        .encode(StandardCharsets.UTF_8)
         .toUriString();
   }
 
