@@ -13,6 +13,46 @@ app:
   cache:
     priceTtlSeconds: ${PRICE_CACHE_TTL_SECONDS:120}
     requestTtlSeconds: ${REQUEST_CACHE_TTL_SECONDS:30}
+  auth:
+    enabled: ${AUTH_ENABLED:true}
+    oneTimeCodeTtlSeconds: ${AUTH_ONE_TIME_CODE_TTL_SECONDS:60}
+    oauthStateTtlSeconds: ${AUTH_OAUTH_STATE_TTL_SECONDS:600}
+    web3authJwtTtlSeconds: ${AUTH_WEB3AUTH_JWT_TTL_SECONDS:300}
+    accessTokenTtlSeconds: ${AUTH_ACCESS_TOKEN_TTL_SECONDS:900}
+    refreshTokenTtlSeconds: ${AUTH_REFRESH_TOKEN_TTL_SECONDS:2592000}
+    xEnabled: ${AUTH_X_ENABLED:true}
+    tgEnabled: ${AUTH_TG_ENABLED:true}
+    syncEnabled: ${AUTH_SYNC_ENABLED:true}
+    bindEnabled: ${AUTH_BIND_ENABLED:true}
+    metricsEnabled: ${AUTH_METRICS_ENABLED:true}
+    appRedirectAllowlist: ${AUTH_APP_REDIRECT_ALLOWLIST:}
+    web3auth:
+      issuer: ${AUTH_WEB3AUTH_ISSUER:https://auth.status-mvp.local}
+      audience: ${AUTH_WEB3AUTH_AUDIENCE:status-mvp}
+      keyId: ${AUTH_WEB3AUTH_KEY_ID:status-mvp-auth-v1}
+      privateKeyPem: ${AUTH_WEB3AUTH_PRIVATE_KEY_PEM:}
+    appJwt:
+      issuer: ${AUTH_APP_JWT_ISSUER:status-mvp-price-backend}
+      audience: ${AUTH_APP_JWT_AUDIENCE:status-mvp-app}
+      secret: ${AUTH_APP_JWT_SECRET:replace-me-dev-secret-at-least-32-bytes}
+    x:
+      clientId: ${AUTH_X_CLIENT_ID:}
+      clientSecret: ${AUTH_X_CLIENT_SECRET:}
+      redirectUri: ${AUTH_X_REDIRECT_URI:}
+      scopes: ${AUTH_X_SCOPES:tweet.read users.read offline.access}
+      authorizeEndpoint: ${AUTH_X_AUTHORIZE_ENDPOINT:https://twitter.com/i/oauth2/authorize}
+      tokenEndpoint: ${AUTH_X_TOKEN_ENDPOINT:https://api.twitter.com/2/oauth2/token}
+      userinfoEndpoint: ${AUTH_X_USERINFO_ENDPOINT:https://api.twitter.com/2/users/me}
+    tg:
+      botToken: ${AUTH_TG_BOT_TOKEN:}
+      authMaxAgeSeconds: ${AUTH_TG_AUTH_MAX_AGE_SECONDS:600}
+    risk:
+      blacklistIps: ${AUTH_RISK_BLACKLIST_IPS:}
+      blacklistProviderSubs: ${AUTH_RISK_BLACKLIST_PROVIDER_SUBS:}
+      loginIpLimit: ${AUTH_RISK_LOGIN_IP_LIMIT:20}
+      loginDeviceLimit: ${AUTH_RISK_LOGIN_DEVICE_LIMIT:30}
+      bindAccountLimit: ${AUTH_RISK_BIND_ACCOUNT_LIMIT:20}
+      windowSeconds: ${AUTH_RISK_WINDOW_SECONDS:60}
   bridge:
     across:
       apiBaseUrl: ${BRIDGE_ACROSS_API_BASE_URL:https://app.across.to/api}
@@ -47,5 +87,16 @@ app:
 logging:
   level:
     root: INFO
+
+management:
+  endpoint:
+    health:
+      show-details: never
+    prometheus:
+      enabled: true
+  endpoints:
+    web:
+      exposure:
+        include: health,info,prometheus
 
 

@@ -22,6 +22,24 @@ Optional:
 - `GET /api/v1/bridge/across/directory` (Across supported chains/routes proxy + allowlist downlink)
 - `GET /health`
 
+### Auth endpoints (M1: X/Telegram + Web3Auth Custom JWT)
+
+- `GET /.well-known/jwks.json`
+- `GET /api/v1/auth/x/start`
+- `GET /api/v1/auth/x/callback`
+- `POST /api/v1/auth/tg/login`
+- `POST /api/v1/auth/exchange`
+- `POST /api/v1/auth/refresh`
+- `GET /api/v1/auth/me`
+- `POST /api/v1/auth/providers/bind`
+- `POST /api/v1/auth/providers/unbind`
+- `GET /api/v1/auth/sync/dapps`
+- `POST /api/v1/auth/sync/dapps`
+
+### Metrics
+
+- `GET /actuator/prometheus`
+
 ## VEILX (BSC) on-chain pricing
 
 CoinGecko may not list VEILX. This service can price **VEILX** directly from BSC by calling PancakeSwap V2 Router
