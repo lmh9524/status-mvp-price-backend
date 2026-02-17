@@ -177,10 +177,28 @@ public class AuthProperties {
   }
 
   public static class Web3Auth {
+    private String clientId = "";
+    private String clientSecret = "";
     private String issuer = "https://auth.status-mvp.local";
     private String audience = "status-mvp";
     private String keyId = "status-mvp-auth-v1";
     private String privateKeyPem = "";
+
+    public String getClientId() {
+      return clientId;
+    }
+
+    public void setClientId(String clientId) {
+      this.clientId = clientId;
+    }
+
+    public String getClientSecret() {
+      return clientSecret;
+    }
+
+    public void setClientSecret(String clientSecret) {
+      this.clientSecret = clientSecret;
+    }
 
     public String getIssuer() {
       return issuer;

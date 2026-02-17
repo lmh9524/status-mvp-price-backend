@@ -27,6 +27,10 @@ app:
     metricsEnabled: ${AUTH_METRICS_ENABLED:true}
     appRedirectAllowlist: ${AUTH_APP_REDIRECT_ALLOWLIST:}
     web3auth:
+      # Optional: Web3Auth dashboard clientId/clientSecret.
+      # Not required for the current JWT verifier flow, but kept server-side for future use.
+      clientId: ${AUTH_WEB3AUTH_CLIENT_ID:}
+      clientSecret: ${AUTH_WEB3AUTH_CLIENT_SECRET:}
       issuer: ${AUTH_WEB3AUTH_ISSUER:https://auth.status-mvp.local}
       audience: ${AUTH_WEB3AUTH_AUDIENCE:status-mvp}
       keyId: ${AUTH_WEB3AUTH_KEY_ID:status-mvp-auth-v1}
