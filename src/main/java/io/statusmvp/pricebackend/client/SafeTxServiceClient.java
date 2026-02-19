@@ -64,10 +64,15 @@ public class SafeTxServiceClient {
         .bodyToMono(String.class)
         .defaultIfEmpty("")
         .map(
-            body ->
-                ResponseEntity.status(resp.statusCode())
-                    .contentType(responseContentType(resp))
-                    .body(body));
+            body -> {
+              ResponseEntity.BodyBuilder b =
+                  ResponseEntity.status(resp.statusCode()).contentType(responseContentType(resp));
+              String retryAfter = resp.headers().asHttpHeaders().getFirst(HttpHeaders.RETRY_AFTER);
+              if (retryAfter != null && !retryAfter.isBlank()) {
+                b.header(HttpHeaders.RETRY_AFTER, retryAfter.trim());
+              }
+              return b.body(body);
+            });
   }
 
   public Mono<ResponseEntity<String>> get(String chain, String path, MultiValueMap<String, String> query) {
@@ -103,4 +108,3 @@ public class SafeTxServiceClient {
         .timeout(timeout);
   }
 }
-
