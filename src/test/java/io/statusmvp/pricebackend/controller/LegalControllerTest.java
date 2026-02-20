@@ -33,6 +33,12 @@ class LegalControllerTest {
   @Test
   void termsReturnsFallbackHtmlWhenUrlMissing() {
     given(legalProperties.getTermsUrl()).willReturn("");
+    given(legalProperties.getAppName()).willReturn("Veil Wallet");
+    given(legalProperties.getEntityName()).willReturn("VeilLabs");
+    given(legalProperties.getContactEmail()).willReturn("veillabs.wallet@gmail.com");
+    given(legalProperties.getContactAddress()).willReturn("香港九龙区");
+    given(legalProperties.getEffectiveDate()).willReturn("2026-02-20");
+    given(legalProperties.getGoverningLawZh()).willReturn("香港特别行政区法律");
 
     webTestClient
         .get()
@@ -43,7 +49,13 @@ class LegalControllerTest {
         .expectHeader()
         .contentType("text/html;charset=UTF-8")
         .expectBody(String.class)
-        .value(body -> org.assertj.core.api.Assertions.assertThat(body).contains("Terms of Service"));
+        .value(
+            body ->
+                org.assertj.core.api.Assertions.assertThat(body)
+                    .contains("Terms of Service")
+                    .contains("VeilLabs")
+                    .contains("veillabs.wallet@gmail.com")
+                    .contains("香港特别行政区法律"));
   }
 
   @Test
@@ -58,5 +70,28 @@ class LegalControllerTest {
         .isFound()
         .expectHeader()
         .valueEquals(HttpHeaders.LOCATION, "https://vex.veilx.global/legal/privacy");
+  }
+
+  @Test
+  void privacyReturnsFallbackHtmlWhenUrlMissing() {
+    given(legalProperties.getPrivacyUrl()).willReturn("");
+    given(legalProperties.getEntityName()).willReturn("VeilLabs");
+    given(legalProperties.getContactEmail()).willReturn("veillabs.wallet@gmail.com");
+
+    webTestClient
+        .get()
+        .uri("/privacy")
+        .exchange()
+        .expectStatus()
+        .isOk()
+        .expectHeader()
+        .contentType("text/html;charset=UTF-8")
+        .expectBody(String.class)
+        .value(
+            body ->
+                org.assertj.core.api.Assertions.assertThat(body)
+                    .contains("Privacy Policy")
+                    .contains("VeilLabs")
+                    .contains("veillabs.wallet@gmail.com"));
   }
 }

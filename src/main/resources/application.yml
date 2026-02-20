@@ -90,6 +90,13 @@ app:
   legal:
     termsUrl: ${LEGAL_TERMS_URL:}
     privacyUrl: ${LEGAL_PRIVACY_URL:}
+    appName: ${LEGAL_APP_NAME:Veil Wallet}
+    entityName: ${LEGAL_ENTITY_NAME:VeilLabs}
+    contactEmail: ${LEGAL_CONTACT_EMAIL:veillabs.wallet@gmail.com}
+    contactAddress: ${LEGAL_CONTACT_ADDRESS:香港九龙区}
+    effectiveDate: ${LEGAL_EFFECTIVE_DATE:2026-02-20}
+    governingLaw: ${LEGAL_GOVERNING_LAW:Laws of the Hong Kong Special Administrative Region}
+    governingLawZh: ${LEGAL_GOVERNING_LAW_ZH:香港特别行政区法律}
 
 logging:
   level:

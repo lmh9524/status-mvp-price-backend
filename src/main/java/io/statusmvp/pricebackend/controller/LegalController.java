@@ -1,5 +1,6 @@
 package io.statusmvp.pricebackend.controller;
 
+import io.statusmvp.pricebackend.legal.LegalPageRenderer;
 import io.statusmvp.pricebackend.legal.LegalProperties;
 import java.net.URI;
 import org.springframework.http.HttpHeaders;
@@ -19,21 +20,16 @@ public class LegalController {
 
   @GetMapping(value = "/terms", produces = MediaType.TEXT_HTML_VALUE)
   public ResponseEntity<String> terms() {
-    return legalPage(
-        legalProperties.getTermsUrl(),
-        "Terms of Service",
-        "Please configure LEGAL_TERMS_URL in backend env.");
+    return legalPage(legalProperties.getTermsUrl(), LegalPageRenderer.renderTermsHtml(legalProperties));
   }
 
   @GetMapping(value = "/privacy", produces = MediaType.TEXT_HTML_VALUE)
   public ResponseEntity<String> privacy() {
     return legalPage(
-        legalProperties.getPrivacyUrl(),
-        "Privacy Policy",
-        "Please configure LEGAL_PRIVACY_URL in backend env.");
+        legalProperties.getPrivacyUrl(), LegalPageRenderer.renderPrivacyHtml(legalProperties));
   }
 
-  private ResponseEntity<String> legalPage(String redirectUrl, String title, String fallbackMessage) {
+  private ResponseEntity<String> legalPage(String redirectUrl, String fallbackHtml) {
     String url = redirectUrl == null ? "" : redirectUrl.trim();
     if (!url.isEmpty()) {
       try {
@@ -41,27 +37,8 @@ public class LegalController {
       } catch (IllegalArgumentException ignored) {
       }
     }
-
-    String html =
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>"
-            + escapeHtml(title)
-            + "</title></head><body><h1>"
-            + escapeHtml(title)
-            + "</h1><p>"
-            + escapeHtml(fallbackMessage)
-            + "</p></body></html>";
     return ResponseEntity.ok()
         .header(HttpHeaders.CONTENT_TYPE, MediaType.TEXT_HTML_VALUE + ";charset=UTF-8")
-        .body(html);
-  }
-
-  private static String escapeHtml(String input) {
-    if (input == null) return "";
-    return input
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&#39;");
+        .body(fallbackHtml);
   }
 }
