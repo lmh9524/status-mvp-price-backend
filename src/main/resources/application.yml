@@ -87,6 +87,9 @@ app:
     symbolIdOverrides: ${COINGECKO_SYMBOL_ID_OVERRIDES:}
   cors:
     allowedOrigins: ${CORS_ALLOWED_ORIGINS:*}
+  legal:
+    termsUrl: ${LEGAL_TERMS_URL:}
+    privacyUrl: ${LEGAL_PRIVACY_URL:}
 
 logging:
   level:
