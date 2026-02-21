@@ -3,6 +3,7 @@ package io.statusmvp.pricebackend.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.statusmvp.pricebackend.model.PortfolioAssetSnapshotV2;
+import io.statusmvp.pricebackend.model.PortfolioChainSummary;
 import io.statusmvp.pricebackend.model.PortfolioSnapshot;
 import io.statusmvp.pricebackend.model.PortfolioSnapshotV2;
 import java.math.BigDecimal;
@@ -31,6 +32,7 @@ public class PortfolioAggregatorService {
   private static final Logger log = LoggerFactory.getLogger(PortfolioAggregatorService.class);
 
   private static final Pattern EVM_ADDRESS = Pattern.compile("^0x[0-9a-fA-F]{40}$");
+  private static final int V1_SUMMARY_SNAPSHOT_LIMIT = 1000;
 
   private static final Map<Integer, ChainMeta> SUPPORTED_CHAINS =
       Map.of(
@@ -66,12 +68,25 @@ public class PortfolioAggregatorService {
     this.ankrApiKey = ankrApiKey == null ? "" : ankrApiKey.trim();
     this.requestTtlSeconds = requestTtlSeconds;
     this.timeout = Duration.ofMillis(Math.max(1000L, timeoutMs));
-    this.defaultChainIds = normalizeChainIds(parseChainIds(defaultChainIds));
+    this.defaultChainIds = normalizeChainIds(parseChainIds(defaultChainIds), true);
   }
 
   public PortfolioSnapshot getPortfolio(String address, List<Integer> requestedChainIds) {
+    return getPortfolio(address, requestedChainIds, false);
+  }
+
+  public PortfolioSnapshot getPortfolio(
+      String address, List<Integer> requestedChainIds, boolean chainIdsExplicitlyRequested) {
     String normalizedAddress = normalizeAddress(address);
-    List<Integer> chainIds = normalizeChainIds(requestedChainIds);
+    List<Integer> chainIds = normalizeChainIds(requestedChainIds, !chainIdsExplicitlyRequested);
+    long now = Instant.now().toEpochMilli();
+
+    // If caller explicitly requested chainIds but none are supported, return an empty snapshot
+    // instead of silently falling back to default mainnet chains.
+    if (chainIdsExplicitlyRequested && chainIds.isEmpty()) {
+      return new PortfolioSnapshot(normalizedAddress, now, 0d, List.of());
+    }
+
     String requestKey = "req:portfolio:" + normalizedAddress + ":" + sha1(joinChainIds(chainIds));
 
     Optional<String> cached = cache.get(requestKey);
@@ -83,17 +98,26 @@ public class PortfolioAggregatorService {
       }
     }
 
-    long now = Instant.now().toEpochMilli();
-    // MVP: "all networks" total only needs an EVM multi-chain USD total.
-    // Use Ankr's precomputed `totalBalanceUsd` for speed and consistency.
-    double totalUsd = fetchTotalBalanceUsdMultiChain(normalizedAddress, chainIds).orElse(0d);
-
-    PortfolioSnapshot snapshot =
-        new PortfolioSnapshot(
+    Optional<PortfolioSnapshotV2> summarySource =
+        fetchSnapshotV2FromAnkr(
             normalizedAddress,
+            chainIds,
+            "usd",
             now,
-            round2(totalUsd),
-            List.of());
+            new SnapshotFilter(0d, true, V1_SUMMARY_SNAPSHOT_LIMIT));
+
+    List<PortfolioChainSummary> chains = buildPortfolioChainSummaries(chainIds, summarySource.orElse(null));
+    Double totalFromSnapshot =
+        summarySource
+            .map(PortfolioSnapshotV2::totalUsd)
+            .filter(v -> v != null && Double.isFinite(v))
+            .orElse(null);
+    double totalUsd =
+        totalFromSnapshot != null
+            ? totalFromSnapshot
+            : fetchTotalBalanceUsdMultiChain(normalizedAddress, chainIds).orElse(sumChainTotals(chains));
+
+    PortfolioSnapshot snapshot = new PortfolioSnapshot(normalizedAddress, now, round2(totalUsd), chains);
     try {
       cache.set(requestKey, mapper.writeValueAsString(snapshot), requestTtlSeconds);
     } catch (Exception ignored) {
@@ -109,10 +133,28 @@ public class PortfolioAggregatorService {
       Double minUsd,
       Boolean includeZero,
       Integer limit) {
+    return getPortfolioSnapshotV2(
+        address, requestedChainIds, currency, minUsd, includeZero, limit, false);
+  }
+
+  public PortfolioSnapshotV2 getPortfolioSnapshotV2(
+      String address,
+      List<Integer> requestedChainIds,
+      String currency,
+      Double minUsd,
+      Boolean includeZero,
+      Integer limit,
+      boolean chainIdsExplicitlyRequested) {
     String normalizedAddress = normalizeAddress(address);
-    List<Integer> chainIds = normalizeChainIds(requestedChainIds);
+    List<Integer> chainIds = normalizeChainIds(requestedChainIds, !chainIdsExplicitlyRequested);
     String cur = normalizeCurrency(currency);
     SnapshotFilter filter = normalizeSnapshotFilter(minUsd, includeZero, limit);
+    long now = Instant.now().toEpochMilli();
+
+    if (chainIdsExplicitlyRequested && chainIds.isEmpty()) {
+      return new PortfolioSnapshotV2(normalizedAddress, now, cur, 0d, Map.of(), List.of());
+    }
+
     String requestKey =
         "req:portfolio:v2:"
             + cur
@@ -136,7 +178,6 @@ public class PortfolioAggregatorService {
       }
     }
 
-    long now = Instant.now().toEpochMilli();
     PortfolioSnapshotV2 snapshot =
         fetchSnapshotV2FromAnkr(normalizedAddress, chainIds, cur, now, filter)
             .orElse(new PortfolioSnapshotV2(normalizedAddress, now, cur, 0d, Map.of(), List.of()));
@@ -521,21 +562,109 @@ public class PortfolioAggregatorService {
     return a;
   }
 
-  private List<Integer> normalizeChainIds(List<Integer> requestedChainIds) {
-    List<Integer> source =
-        requestedChainIds == null || requestedChainIds.isEmpty()
-            ? defaultChainIds
-            : requestedChainIds;
+  private List<Integer> normalizeChainIds(List<Integer> requestedChainIds, boolean fallbackToDefaultWhenEmpty) {
+    List<Integer> source = requestedChainIds == null ? List.of() : requestedChainIds;
+    if (source.isEmpty() && fallbackToDefaultWhenEmpty) {
+      source = defaultChainIds;
+    }
     List<Integer> out = new ArrayList<>();
     for (Integer id : source) {
       if (id == null) continue;
       if (!SUPPORTED_CHAINS.containsKey(id)) continue;
       if (!out.contains(id)) out.add(id);
     }
-    if (out.isEmpty()) {
+    if (out.isEmpty() && fallbackToDefaultWhenEmpty) {
       out.addAll(defaultChainIds.isEmpty() ? List.of(1, 10, 56, 8453, 42161) : defaultChainIds);
     }
     return out;
+  }
+
+  private List<PortfolioChainSummary> buildPortfolioChainSummaries(
+      List<Integer> chainIds, PortfolioSnapshotV2 snapshot) {
+    if (chainIds == null || chainIds.isEmpty()) return List.of();
+
+    Map<Integer, ChainSummaryAccumulator> accByChainId = new LinkedHashMap<>();
+    for (Integer chainId : chainIds) {
+      if (chainId == null) continue;
+      ChainMeta meta = SUPPORTED_CHAINS.get(chainId);
+      String blockchain = meta != null ? meta.blockchain() : "unknown";
+      String nativeSymbol = meta != null ? meta.nativeSymbol() : "";
+      accByChainId.put(chainId, new ChainSummaryAccumulator(blockchain, nativeSymbol));
+    }
+
+    if (snapshot != null && snapshot.assets() != null) {
+      for (PortfolioAssetSnapshotV2 asset : snapshot.assets()) {
+        if (asset == null) continue;
+        ChainSummaryAccumulator acc = accByChainId.get(asset.chainId());
+        if (acc == null) continue;
+
+        String blockchain = normalizeBlankToNull(asset.blockchain());
+        if (blockchain != null) acc.blockchain = blockchain;
+
+        if (asset.isNative()) {
+          String nativeBalance = normalizeBlankToNull(asset.balance());
+          if (nativeBalance != null) acc.nativeBalance = nativeBalance;
+
+          Double nativeUsdPrice = positiveOrNull(asset.usdPrice());
+          if (nativeUsdPrice != null) acc.nativeUsdPrice = nativeUsdPrice;
+
+          Double nativeUsdValue = positiveOrNull(asset.usdValue());
+          if (nativeUsdValue != null) {
+            acc.nativeUsdValue = (acc.nativeUsdValue == null ? 0d : acc.nativeUsdValue) + nativeUsdValue;
+          }
+          continue;
+        }
+
+        acc.tokenCount += 1;
+        Double tokenUsdPrice = positiveOrNull(asset.usdPrice());
+        if (tokenUsdPrice != null) acc.pricedTokenCount += 1;
+
+        Double tokenUsdValue = positiveOrNull(asset.usdValue());
+        if (tokenUsdValue != null) acc.tokenUsdValue += tokenUsdValue;
+      }
+    }
+
+    List<PortfolioChainSummary> out = new ArrayList<>();
+    for (Integer chainId : chainIds) {
+      ChainSummaryAccumulator acc = accByChainId.get(chainId);
+      if (acc == null) continue;
+
+      Double nativeUsdPrice = positiveOrNull(acc.nativeUsdPrice);
+      Double nativeUsdValue = positiveOrNull(acc.nativeUsdValue);
+      Double tokenUsdValue = acc.tokenUsdValue > 0 ? round2(acc.tokenUsdValue) : null;
+      double totalUsdRaw = (nativeUsdValue != null ? nativeUsdValue : 0d) + (tokenUsdValue != null ? tokenUsdValue : 0d);
+
+      out.add(
+          new PortfolioChainSummary(
+              chainId,
+              acc.blockchain,
+              acc.nativeSymbol,
+              acc.nativeBalance,
+              nativeUsdPrice,
+              nativeUsdValue != null ? round2(nativeUsdValue) : null,
+              tokenUsdValue,
+              round2(totalUsdRaw),
+              acc.tokenCount,
+              acc.pricedTokenCount));
+    }
+    return out;
+  }
+
+  private static Double positiveOrNull(Double value) {
+    if (value == null || !Double.isFinite(value) || value <= 0d) return null;
+    return value;
+  }
+
+  private static double sumChainTotals(List<PortfolioChainSummary> chains) {
+    if (chains == null || chains.isEmpty()) return 0d;
+    double sum = 0d;
+    for (PortfolioChainSummary chain : chains) {
+      if (chain == null || chain.totalUsd() == null) continue;
+      Double total = chain.totalUsd();
+      if (total == null || !Double.isFinite(total) || total <= 0d) continue;
+      sum += total;
+    }
+    return sum;
   }
 
   private static double round2(double value) {
@@ -562,6 +691,22 @@ public class PortfolioAggregatorService {
       return sb.toString();
     } catch (Exception e) {
       return Integer.toHexString(input.hashCode());
+    }
+  }
+
+  private static final class ChainSummaryAccumulator {
+    private String blockchain;
+    private final String nativeSymbol;
+    private String nativeBalance = "0";
+    private Double nativeUsdPrice;
+    private Double nativeUsdValue;
+    private double tokenUsdValue;
+    private int tokenCount;
+    private int pricedTokenCount;
+
+    private ChainSummaryAccumulator(String blockchain, String nativeSymbol) {
+      this.blockchain = blockchain;
+      this.nativeSymbol = nativeSymbol;
     }
   }
 

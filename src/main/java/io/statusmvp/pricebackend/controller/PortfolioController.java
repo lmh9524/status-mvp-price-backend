@@ -29,7 +29,8 @@ public class PortfolioController {
       @RequestParam("address") @NotBlank String address,
       @RequestParam(value = "chainIds", required = false) String chainIds) {
     List<Integer> parsed = portfolio.parseChainIds(chainIds);
-    return Mono.fromCallable(() -> portfolio.getPortfolio(address, parsed))
+    boolean chainIdsExplicitlyRequested = chainIds != null && !chainIds.isBlank();
+    return Mono.fromCallable(() -> portfolio.getPortfolio(address, parsed, chainIdsExplicitlyRequested))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -42,8 +43,11 @@ public class PortfolioController {
       @RequestParam(value = "includeZero", required = false) Boolean includeZero,
       @RequestParam(value = "limit", required = false) Integer limit) {
     List<Integer> parsed = portfolio.parseChainIds(chainIds);
+    boolean chainIdsExplicitlyRequested = chainIds != null && !chainIds.isBlank();
     return Mono.fromCallable(
-            () -> portfolio.getPortfolioSnapshotV2(address, parsed, currency, minUsd, includeZero, limit))
+            () ->
+                portfolio.getPortfolioSnapshotV2(
+                    address, parsed, currency, minUsd, includeZero, limit, chainIdsExplicitlyRequested))
         .subscribeOn(Schedulers.boundedElastic());
   }
 }
