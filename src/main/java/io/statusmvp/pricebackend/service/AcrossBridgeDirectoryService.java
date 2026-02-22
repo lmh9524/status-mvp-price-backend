@@ -140,7 +140,7 @@ public class AcrossBridgeDirectoryService {
       String name = chain.path("name").asText(null);
       String publicRpcUrl = chain.path("publicRpcUrl").asText(null);
       String explorerUrl = chain.path("explorerUrl").asText(null);
-      String logoUrl = chain.path("logoUrl").asText(null);
+      String logoUrl = normalizeBlankToNull(chain.path("logoUrl").asText(null));
       String spokePool = chain.path("spokePool").asText(null);
       Long spokePoolBlock =
           chain.path("spokePoolBlock").isNumber() ? chain.path("spokePoolBlock").asLong() : null;
@@ -252,7 +252,7 @@ public class AcrossBridgeDirectoryService {
       String address = t.path("address").asText(null);
       String name = t.path("name").asText(null);
       int decimals = t.path("decimals").asInt(0);
-      String logoUrl = t.path("logoUrl").asText(null);
+      String logoUrl = normalizeBlankToNull(t.path("logoUrl").asText(null));
       if (decimals <= 0) continue;
       if (address == null || address.isBlank()) continue;
       out.add(new Token(address, symbol, name, decimals, logoUrl));
@@ -294,5 +294,11 @@ public class AcrossBridgeDirectoryService {
   private static String upper(String raw) {
     if (raw == null) return "";
     return raw.trim().toUpperCase(Locale.ROOT);
+  }
+
+  private static String normalizeBlankToNull(String raw) {
+    if (raw == null) return null;
+    String trimmed = raw.trim();
+    return trimmed.isEmpty() ? null : trimmed;
   }
 }
