@@ -26,6 +26,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.web3j.crypto.Keys;
 
 @Service
 public class PortfolioAggregatorService {
@@ -41,6 +42,39 @@ public class PortfolioAggregatorService {
           56, new ChainMeta("bsc", "BNB"),
           8453, new ChainMeta("base", "ETH"),
           42161, new ChainMeta("arbitrum", "ETH"));
+
+  // Best-effort: if upstream doesn't provide thumbnails, fall back to TrustWallet's public assets repo.
+  // Client still needs to handle 404 (not all assets exist).
+  private static final String TRUSTWALLET_CDN_PREFIX =
+      "https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains/";
+  private static final Map<Integer, String> TRUSTWALLET_CHAIN_SLUG_BY_ID =
+      Map.of(
+          1, "ethereum",
+          10, "optimism",
+          56, "smartchain",
+          8453, "base",
+          42161, "arbitrum");
+
+  private static String buildTrustWalletChainLogoUrl(Integer chainId) {
+    if (chainId == null) return null;
+    String slug = TRUSTWALLET_CHAIN_SLUG_BY_ID.get(chainId);
+    if (slug == null || slug.isBlank()) return null;
+    return TRUSTWALLET_CDN_PREFIX + slug + "/info/logo.png";
+  }
+
+  private static String buildTrustWalletAssetLogoUrl(Integer chainId, String contract) {
+    if (chainId == null) return null;
+    String slug = TRUSTWALLET_CHAIN_SLUG_BY_ID.get(chainId);
+    if (slug == null || slug.isBlank()) return null;
+    String addr = contract == null ? "" : contract.trim();
+    if (!EVM_ADDRESS.matcher(addr).matches()) return null;
+    try {
+      String checksum = Keys.toChecksumAddress(addr);
+      return TRUSTWALLET_CDN_PREFIX + slug + "/assets/" + checksum + "/logo.png";
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
 
   private final WebClient webClient;
   private final RedisCache cache;
@@ -323,6 +357,9 @@ public class PortfolioAggregatorService {
         continue;
       }
       String logoUrl = normalizeBlankToNull(asset.path("thumbnail").asText(null));
+      if (logoUrl == null) {
+        logoUrl = isNative ? buildTrustWalletChainLogoUrl(chainId) : buildTrustWalletAssetLogoUrl(chainId, contract);
+      }
       Long blockNumber = parseLong(asset.path("blockHeight"));
       if (blockNumber != null) {
         Long prev = blockNumbersByChainId.get(chainId);
