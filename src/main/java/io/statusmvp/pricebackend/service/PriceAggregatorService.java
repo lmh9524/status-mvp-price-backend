@@ -126,6 +126,18 @@ public class PriceAggregatorService {
       }
     }
 
+    // VIPL on-chain DEX pricing (BSC PancakeSwap V2): 1 VIPL ~ X USDT (assume USDT~USD)
+    if ("usd".equals(currency) && "VIPL".equals(symbol) && veilxDex != null && veilxDex.isEnabled()) {
+      Double p = veilxDex.fetchViplUsdPrice().orElse(null);
+      if (p != null) {
+        PriceQuote q = new PriceQuote(symbol, p, "usd", ts, "pancakeswap_v2", null, null);
+        try {
+          cache.set(key, mapper.writeValueAsString(q), priceTtlSeconds);
+        } catch (Exception ignored) {}
+        return q;
+      }
+    }
+
     // 1) CoinGecko Pro (symbol -> id)
     Double price = null;
     String source = null;
@@ -233,6 +245,14 @@ public class PriceAggregatorService {
         if (v != null) {
           // Only fill VEILX contract. Others remain null.
           prices.put(veilxAddr, v);
+          if (source == null) source = "pancakeswap_v2";
+        }
+      }
+      String viplAddr = veilxDex.viplContractLower();
+      if (!viplAddr.isBlank() && addrs.contains(viplAddr)) {
+        Double v = veilxDex.fetchViplUsdPrice().orElse(null);
+        if (v != null) {
+          prices.put(viplAddr, v);
           if (source == null) source = "pancakeswap_v2";
         }
       }

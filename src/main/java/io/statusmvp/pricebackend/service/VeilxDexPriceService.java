@@ -42,14 +42,18 @@ public class VeilxDexPriceService {
   private static final String DEFAULT_PANCAKE_ROUTER_V2 = "0x10ED43C718714eb63d5aA57B78B54704E256024E";
   // USDT (BSC) commonly used address
   private static final String DEFAULT_BSC_USDT = "0x55d398326f99059fF775485246999027B3197955";
+  // VIPL (BSC)
+  private static final String DEFAULT_BSC_VIPL = "0x796B08f7BA8d1859Ea4B9FBFECe57D06A1b49F88";
 
   private final Optional<Web3j> web3j;
   private final String routerAddress;
   private final String veilxAddress;
   private final String usdtAddress;
+  private final String viplAddress = normalizeAddress(DEFAULT_BSC_VIPL);
 
   // Cache decimals to avoid extra calls
   private final AtomicReference<Integer> veilxDecimals = new AtomicReference<>(null);
+  private final AtomicReference<Integer> viplDecimals = new AtomicReference<>(null);
   private final AtomicReference<Integer> usdtDecimals = new AtomicReference<>(null);
 
   public VeilxDexPriceService(
@@ -64,7 +68,7 @@ public class VeilxDexPriceService {
   }
 
   public boolean isEnabled() {
-    return web3j.isPresent() && !veilxAddress.isBlank() && !routerAddress.isBlank() && !usdtAddress.isBlank();
+    return web3j.isPresent() && !routerAddress.isBlank() && !usdtAddress.isBlank();
   }
 
   /** Returns the configured VEILX contract address (lowercased), or empty string if not set. */
@@ -72,27 +76,42 @@ public class VeilxDexPriceService {
     return veilxAddress == null ? "" : veilxAddress.trim().toLowerCase();
   }
 
+  /** Returns the configured VIPL contract address (lowercased). */
+  public String viplContractLower() {
+    return viplAddress == null ? "" : viplAddress.trim().toLowerCase();
+  }
+
   /** Returns VEILX price in USD (via USDT), e.g. 0.0042. */
   public Optional<Double> fetchVeilxUsdPrice() {
-    if (!isEnabled()) return Optional.empty();
+    return fetchUsdPriceByToken(veilxAddress, veilxDecimals, "VEILX");
+  }
+
+  /** Returns VIPL price in USD (via USDT), e.g. 0.0239. */
+  public Optional<Double> fetchViplUsdPrice() {
+    return fetchUsdPriceByToken(viplAddress, viplDecimals, "VIPL");
+  }
+
+  private Optional<Double> fetchUsdPriceByToken(
+      String tokenAddress, AtomicReference<Integer> tokenDecimals, String tokenSymbol) {
+    if (!isEnabled() || tokenAddress.isBlank()) return Optional.empty();
     try {
-      int vDec = getDecimalsCached(veilxAddress, veilxDecimals, 18);
+      int tokenDec = getDecimalsCached(tokenAddress, tokenDecimals, 18);
       int uDec = getDecimalsCached(usdtAddress, usdtDecimals, 18);
 
-      BigInteger amountIn = BigInteger.TEN.pow(vDec); // 1 VEILX
+      BigInteger amountIn = BigInteger.TEN.pow(tokenDec); // 1 token
       Function fn =
           new Function(
               "getAmountsOut",
               Arrays.asList(
                   new Uint256(amountIn),
-                  new DynamicArray<>(Address.class, new Address(veilxAddress), new Address(usdtAddress))),
+                  new DynamicArray<>(Address.class, new Address(tokenAddress), new Address(usdtAddress))),
               Collections.singletonList(new TypeReference<DynamicArray<Uint256>>() {}));
 
       String data = FunctionEncoder.encode(fn);
       Transaction tx = Transaction.createEthCallTransaction(null, routerAddress, data);
       EthCall resp = web3j.get().ethCall(tx, DefaultBlockParameterName.LATEST).send();
       if (resp.hasError()) {
-        log.warn("VEILX DEX price eth_call error: {}", resp.getError().getMessage());
+        log.warn("{} DEX price eth_call error: {}", tokenSymbol, resp.getError().getMessage());
         return Optional.empty();
       }
 
@@ -110,7 +129,7 @@ public class VeilxDexPriceService {
       BigDecimal price = outUsdt.setScale(8, RoundingMode.HALF_UP);
       return Optional.of(price.doubleValue());
     } catch (Exception e) {
-      log.warn("VEILX DEX price request failed", e);
+      log.warn("{} DEX price request failed", tokenSymbol, e);
       return Optional.empty();
     }
   }
