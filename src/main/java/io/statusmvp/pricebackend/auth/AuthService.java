@@ -186,7 +186,7 @@ public class AuthService {
               AuthErrorCode.PROVIDER_UNAVAILABLE,
               e.getMessage(),
               503,
-              3,
+              e.getRetryAfterSeconds() == null ? 3 : e.getRetryAfterSeconds(),
               Map.of(
                   "resumeToken", resumeToken,
                   "providerStatus", e.getDetails().getOrDefault("providerStatus", 0)));

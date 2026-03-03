@@ -125,13 +125,17 @@ public class XOAuthClient {
       return userIdFromJwt;
     }
 
-    final int maxAttempts = 5;
     final String primaryEndpoint = x.getUserinfoEndpoint();
     final String secondaryEndpoint = alternateUserinfoEndpoint(primaryEndpoint);
-    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+
+    // IMPORTANT: Keep this call path fast (no long sleeps / retries). The browser callback is often
+    // behind a reverse-proxy with strict timeouts; the app can retry using /api/v1/auth/x/resume.
+    AuthException last = null;
+    String[] endpoints =
+        secondaryEndpoint == null ? new String[] {primaryEndpoint} : new String[] {primaryEndpoint, secondaryEndpoint};
+
+    for (String endpoint : endpoints) {
       try {
-        String endpoint =
-            secondaryEndpoint != null && attempt % 2 == 0 ? secondaryEndpoint : primaryEndpoint;
         JsonNode response =
             webClient
                 .get()
@@ -140,35 +144,30 @@ public class XOAuthClient {
                 .header(HttpHeaders.USER_AGENT, USER_AGENT)
                 .retrieve()
                 .bodyToMono(JsonNode.class)
-                .timeout(Duration.ofSeconds(6))
+                .timeout(Duration.ofSeconds(5))
                 .block();
         String userId = response == null ? "" : response.path("data").path("id").asText("");
         if (userId.isBlank()) {
           metrics.providerUnavailable("x");
-          throw new AuthException(
-              AuthErrorCode.PROVIDER_UNAVAILABLE, "x user id not found", 503, null, Map.of());
+          last =
+              new AuthException(
+                  AuthErrorCode.PROVIDER_UNAVAILABLE,
+                  "x user id not found",
+                  503,
+                  3,
+                  Map.of("providerStatus", 0));
+          continue;
         }
         return userId;
       } catch (WebClientResponseException e) {
         int status = e.getRawStatusCode();
-        if (isTransientStatus(status) && attempt < maxAttempts) {
-          log.warn(
-              "x userinfo transient error: status={} attempt={}/{} endpoint={} headers={}",
-              status,
-              attempt,
-              maxAttempts,
-              secondaryEndpoint != null && attempt % 2 == 0 ? secondaryEndpoint : primaryEndpoint,
-              providerDebugHeaders(e));
-          sleepBackoff(attempt, parseRetryAfterSeconds(e));
-          continue;
-        }
-
+        Map<String, String> headers = providerDebugHeaders(e);
         metrics.providerUnavailable("x");
         log.warn(
             "x userinfo failed: status={} endpoint={} headers={} body={}",
             status,
-            secondaryEndpoint != null && attempt % 2 == 0 ? secondaryEndpoint : primaryEndpoint,
-            providerDebugHeaders(e),
+            endpoint,
+            headers,
             sanitizeProviderBody(e.getResponseBodyAsString(StandardCharsets.UTF_8)));
 
         if (status == 401) {
@@ -181,10 +180,14 @@ public class XOAuthClient {
         }
         if (status == 403) {
           throw new AuthException(
-              AuthErrorCode.FORBIDDEN, "x provider forbidden", 502, null, Map.of("providerStatus", status));
+              AuthErrorCode.FORBIDDEN,
+              "x provider forbidden",
+              502,
+              null,
+              Map.of("providerStatus", status));
         }
         if (status == 429) {
-          int retryAfter = parseRetryAfterSeconds(e);
+          int retryAfter = parseRetryAfterSeconds(e, true);
           throw new AuthException(
               AuthErrorCode.RATE_LIMITED,
               "x rate limited",
@@ -192,52 +195,41 @@ public class XOAuthClient {
               retryAfter > 0 ? retryAfter : null,
               Map.of("providerStatus", status, "scope", "x"));
         }
-        throw new AuthException(
-            AuthErrorCode.PROVIDER_UNAVAILABLE,
-            "x provider unavailable",
-            503,
-            null,
-            Map.of("providerStatus", status));
+
+        if (isTransientStatus(status)) {
+          int retryAfter = parseRetryAfterSeconds(e, false);
+          last =
+              new AuthException(
+                  AuthErrorCode.PROVIDER_UNAVAILABLE,
+                  "x provider unavailable",
+                  503,
+                  retryAfter > 0 ? Math.min(15, retryAfter) : 3,
+                  Map.of("providerStatus", status, "headers", headers));
+          continue;
+        }
+
+        last =
+            new AuthException(
+                AuthErrorCode.PROVIDER_UNAVAILABLE,
+                "x provider unavailable",
+                503,
+                3,
+                Map.of("providerStatus", status, "headers", headers));
       } catch (AuthException e) {
         throw e;
       } catch (Exception e) {
-        if (attempt < maxAttempts) {
-          log.warn("x userinfo transient exception: attempt={}/{} err={}", attempt, maxAttempts, e.toString());
-          sleepBackoff(attempt, 0);
-          continue;
-        }
         metrics.providerUnavailable("x");
-        log.warn("x userinfo failed: {}", e.toString());
-        throw new AuthException(
-            AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, null, Map.of());
+        log.warn("x userinfo failed: endpoint={} err={}", endpoint, e.toString());
+        last = new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, 3, Map.of());
       }
     }
-    metrics.providerUnavailable("x");
-    throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, null, Map.of());
+
+    if (last != null) throw last;
+    throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, 3, Map.of());
   }
 
   private static boolean isTransientStatus(int status) {
     return status == 502 || status == 503 || status == 504;
-  }
-
-  private static void sleepBackoff(int attempt, int retryAfterSeconds) {
-    long ms = backoffMs(attempt, retryAfterSeconds);
-    try {
-      Thread.sleep(ms);
-    } catch (InterruptedException ignored) {
-      Thread.currentThread().interrupt();
-    }
-  }
-
-  private static long backoffMs(int attempt, int retryAfterSeconds) {
-    int cappedAttempt = Math.max(1, Math.min(6, attempt));
-    if (retryAfterSeconds > 0) {
-      long cappedSeconds = Math.min(15L, retryAfterSeconds);
-      return cappedSeconds * 1000L;
-    }
-    // Exponential backoff: 0.8s, 1.6s, 3.2s, 6.4s...
-    long ms = 800L * (1L << (cappedAttempt - 1));
-    return Math.min(10_000L, ms);
   }
 
   private static String alternateUserinfoEndpoint(String endpoint) {
@@ -324,7 +316,7 @@ public class XOAuthClient {
     }
   }
 
-  private static int parseRetryAfterSeconds(WebClientResponseException e) {
+  private static int parseRetryAfterSeconds(WebClientResponseException e, boolean allowRateLimitResetFallback) {
     if (e == null || e.getHeaders() == null) return 0;
     String retryAfter = e.getHeaders().getFirst(HttpHeaders.RETRY_AFTER);
     if (retryAfter != null) {
@@ -339,6 +331,7 @@ public class XOAuthClient {
     }
 
     // X frequently uses x-rate-limit-reset (epoch seconds).
+    if (!allowRateLimitResetFallback) return 0;
     String reset = e.getHeaders().getFirst("x-rate-limit-reset");
     if (reset != null) {
       String trimmed = reset.trim();
