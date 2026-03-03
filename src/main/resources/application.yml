@@ -43,6 +43,7 @@ app:
       clientId: ${AUTH_X_CLIENT_ID:}
       clientSecret: ${AUTH_X_CLIENT_SECRET:}
       redirectUri: ${AUTH_X_REDIRECT_URI:}
+      stateSecret: ${AUTH_X_STATE_SECRET:}
       scopes: ${AUTH_X_SCOPES:tweet.read users.read offline.access}
       authorizeEndpoint: ${AUTH_X_AUTHORIZE_ENDPOINT:https://twitter.com/i/oauth2/authorize}
       tokenEndpoint: ${AUTH_X_TOKEN_ENDPOINT:https://api.twitter.com/2/oauth2/token}

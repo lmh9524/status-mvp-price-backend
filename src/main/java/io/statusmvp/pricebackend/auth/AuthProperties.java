@@ -267,6 +267,16 @@ public class AuthProperties {
     private String clientId = "";
     private String clientSecret = "";
     private String redirectUri = "";
+    /**
+     * Optional secret for stateless OAuth state tokens.
+     *
+     * If set (recommended in multi-node deployments), the backend will:
+     * - issue a signed state token (no Redis dependency for state)
+     * - deterministically derive the PKCE code_verifier from the state payload
+     *
+     * Keep this value the same across all nodes.
+     */
+    private String stateSecret = "";
     private String scopes = "tweet.read users.read offline.access";
     private String authorizeEndpoint = "https://twitter.com/i/oauth2/authorize";
     private String tokenEndpoint = "https://api.twitter.com/2/oauth2/token";
@@ -294,6 +304,14 @@ public class AuthProperties {
 
     public void setRedirectUri(String redirectUri) {
       this.redirectUri = redirectUri;
+    }
+
+    public String getStateSecret() {
+      return stateSecret;
+    }
+
+    public void setStateSecret(String stateSecret) {
+      this.stateSecret = stateSecret;
     }
 
     public String getScopes() {

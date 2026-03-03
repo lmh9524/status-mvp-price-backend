@@ -53,7 +53,9 @@ public class AuthController {
               AuthService.XCallbackResult result =
                   authService.handleXCallback(code, state, error, errorDescription, ip, deviceId);
               if (result.appRedirectUri() != null && !result.appRedirectUri().isBlank()) {
-                String location = authService.callbackRedirectUrl(result.appRedirectUri(), result.payload());
+                String location =
+                    authService.callbackRedirectUrl(
+                        result.appRedirectUri(), result.payload(), result.state());
                 return ResponseEntity.status(HttpStatus.FOUND).header(HttpHeaders.LOCATION, location).build();
               }
               return ResponseEntity.ok(result.payload());

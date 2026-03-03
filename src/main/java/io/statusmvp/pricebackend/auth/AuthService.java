@@ -10,6 +10,7 @@ import io.statusmvp.pricebackend.auth.model.RefreshTokenRecord;
 import io.statusmvp.pricebackend.auth.model.SyncFavorites;
 import io.statusmvp.pricebackend.auth.model.SyncHistory;
 import io.statusmvp.pricebackend.auth.model.WalletProfile;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -39,6 +40,7 @@ public class AuthService {
   private final AuthRiskService riskService;
   private final AuthJwtService jwtService;
   private final AuthMetrics metrics;
+  private final ObjectMapper objectMapper;
 
   public AuthService(
       AuthProperties authProperties,
@@ -47,7 +49,8 @@ public class AuthService {
       TelegramVerifier telegramVerifier,
       AuthRiskService riskService,
       AuthJwtService jwtService,
-      AuthMetrics metrics) {
+      AuthMetrics metrics,
+      ObjectMapper objectMapper) {
     this.authProperties = authProperties;
     this.store = store;
     this.xOAuthClient = xOAuthClient;
@@ -55,6 +58,7 @@ public class AuthService {
     this.riskService = riskService;
     this.jwtService = jwtService;
     this.metrics = metrics;
+    this.objectMapper = objectMapper;
   }
 
   public AuthDtos.XStartResponse startXLogin(String appRedirectUri) {
@@ -63,22 +67,39 @@ public class AuthService {
     validateXConfig();
     validateAppRedirect(appRedirectUri);
 
-    String state = AuthUtils.randomBase64Url(24);
-    String codeVerifier = AuthUtils.randomBase64Url(48);
-    String codeChallenge = AuthUtils.sha256Base64Url(codeVerifier);
-    long now = now();
-    OAuthStateRecord stateRecord =
-        new OAuthStateRecord(
-            state,
-            AuthProvider.X.code(),
-            codeVerifier,
-            emptyToNull(appRedirectUri),
-            now,
-            now + authProperties.getOauthStateTtlSeconds() * 1000);
-    store.putOAuthState(stateRecord, authProperties.getOauthStateTtlSeconds());
+    String state;
+    String codeVerifier;
+    String codeChallenge;
+
+    String stateSecret = authProperties.getX().getStateSecret();
+    if (StringUtils.hasText(stateSecret)) {
+      XOAuthStateTokens.Issued issued =
+          XOAuthStateTokens.issue(
+              objectMapper,
+              stateSecret,
+              emptyToNull(appRedirectUri),
+              authProperties.getOauthStateTtlSeconds(),
+              now());
+      state = issued.state();
+      codeVerifier = issued.codeVerifier();
+      codeChallenge = AuthUtils.sha256Base64Url(codeVerifier);
+    } else {
+      state = AuthUtils.randomBase64Url(24);
+      codeVerifier = AuthUtils.randomBase64Url(48);
+      codeChallenge = AuthUtils.sha256Base64Url(codeVerifier);
+      long now = now();
+      OAuthStateRecord stateRecord =
+          new OAuthStateRecord(
+              state,
+              AuthProvider.X.code(),
+              codeVerifier,
+              emptyToNull(appRedirectUri),
+              now,
+              now + authProperties.getOauthStateTtlSeconds() * 1000);
+      store.putOAuthState(stateRecord, authProperties.getOauthStateTtlSeconds());
+    }
     return new AuthDtos.XStartResponse(
-        xOAuthClient.buildAuthorizeUrl(state, codeChallenge),
-        state,
+        xOAuthClient.buildAuthorizeUrl(state, codeChallenge), state,
         authProperties.getOauthStateTtlSeconds());
   }
 
@@ -95,12 +116,35 @@ public class AuthService {
     riskService.checkIpAllowed(ip);
     riskService.checkLoginRateLimits(ip, deviceId);
 
-    OAuthStateRecord stateRecord =
-        store
-            .consumeOAuthState(state)
-            .orElseThrow(() -> new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401));
-    if (stateRecord.expiresAt() < now()) {
-      throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+    String appRedirectUri;
+    String codeVerifier;
+
+    String stateSecret = authProperties.getX().getStateSecret();
+    if (StringUtils.hasText(stateSecret) && XOAuthStateTokens.looksLikeToken(state)) {
+      XOAuthStateTokens.Parsed parsed =
+          XOAuthStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
+      if (parsed == null) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+      }
+      appRedirectUri = parsed.appRedirectUri();
+      codeVerifier = parsed.codeVerifier();
+      if (parsed.expiresAtMs() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      validateAppRedirect(appRedirectUri);
+    } else {
+      OAuthStateRecord stateRecord =
+          store
+              .consumeOAuthState(state)
+              .orElseThrow(
+                  () ->
+                      new AuthException(
+                          AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401));
+      if (stateRecord.expiresAt() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      appRedirectUri = stateRecord.appRedirectUri();
+      codeVerifier = stateRecord.codeVerifier();
     }
     if (StringUtils.hasText(error)) {
       metrics.loginFailure("x", "oauth_error");
@@ -114,7 +158,7 @@ public class AuthService {
       throw new AuthException(AuthErrorCode.OAUTH_EXCHANGE_FAILED, "x oauth code missing", 400);
     }
 
-    String accessToken = xOAuthClient.exchangeCodeForAccessToken(code, stateRecord.codeVerifier());
+    String accessToken = xOAuthClient.exchangeCodeForAccessToken(code, codeVerifier);
     String providerUserId = xOAuthClient.fetchUserId(accessToken);
     String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
     riskService.checkProviderAllowed(providerSub);
@@ -128,7 +172,8 @@ public class AuthService {
             providerSub,
             authCode.code(),
             authProperties.getOneTimeCodeTtlSeconds()),
-        stateRecord.appRedirectUri());
+        appRedirectUri,
+        state);
   }
 
   public AuthDtos.AuthCodeResponse telegramLogin(
@@ -346,14 +391,17 @@ public class AuthService {
     return jwtService.web3AuthJwksJson();
   }
 
-  public String callbackRedirectUrl(String appRedirectUri, AuthDtos.AuthCodeResponse response) {
-    return UriComponentsBuilder.fromUriString(appRedirectUri)
-        .queryParam("provider", response.provider())
-        .queryParam("providerUserId", response.providerUserId())
-        .queryParam("providerSub", response.providerSub())
-        .queryParam("authCode", response.code())
-        .build(true)
-        .toUriString();
+  public String callbackRedirectUrl(String appRedirectUri, AuthDtos.AuthCodeResponse response, String state) {
+    UriComponentsBuilder b =
+        UriComponentsBuilder.fromUriString(appRedirectUri)
+            .queryParam("provider", response.provider())
+            .queryParam("providerUserId", response.providerUserId())
+            .queryParam("providerSub", response.providerSub())
+            .queryParam("authCode", response.code());
+    if (StringUtils.hasText(state)) {
+      b = b.queryParam("state", state);
+    }
+    return b.build(true).toUriString();
   }
 
   private SyncFavorites mergeFavorites(
@@ -611,5 +659,5 @@ public class AuthService {
     return v.isEmpty() ? null : v;
   }
 
-  public record XCallbackResult(AuthDtos.AuthCodeResponse payload, String appRedirectUri) {}
+  public record XCallbackResult(AuthDtos.AuthCodeResponse payload, String appRedirectUri, String state) {}
 }
