@@ -1,9 +1,11 @@
 package io.statusmvp.pricebackend.auth;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Base64;
+import java.util.LinkedHashMap;
 import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -22,6 +24,7 @@ public class XOAuthClient {
   private static final Logger log = LoggerFactory.getLogger(XOAuthClient.class);
   private static final int MAX_LOG_BODY_CHARS = 800;
   private static final String USER_AGENT = "Mozilla/5.0 (compatible; VeilWalletAuthBackend/1.0)";
+  private static final ObjectMapper JWT_MAPPER = new ObjectMapper();
   private final WebClient webClient;
   private final AuthProperties authProperties;
   private final AuthMetrics metrics;
@@ -116,12 +119,19 @@ public class XOAuthClient {
 
   public String fetchUserId(String accessToken) {
     AuthProperties.X x = authProperties.getX();
-    final int maxAttempts = 3;
+
+    String userIdFromJwt = tryExtractNumericUserIdFromJwt(accessToken);
+    if (userIdFromJwt != null) {
+      return userIdFromJwt;
+    }
+
+    final int maxAttempts = 5;
     final String primaryEndpoint = x.getUserinfoEndpoint();
     final String secondaryEndpoint = alternateUserinfoEndpoint(primaryEndpoint);
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        String endpoint = attempt == 2 && secondaryEndpoint != null ? secondaryEndpoint : primaryEndpoint;
+        String endpoint =
+            secondaryEndpoint != null && attempt % 2 == 0 ? secondaryEndpoint : primaryEndpoint;
         JsonNode response =
             webClient
                 .get()
@@ -143,20 +153,22 @@ public class XOAuthClient {
         int status = e.getRawStatusCode();
         if (isTransientStatus(status) && attempt < maxAttempts) {
           log.warn(
-              "x userinfo transient error: status={} attempt={}/{} endpoint={}",
+              "x userinfo transient error: status={} attempt={}/{} endpoint={} headers={}",
               status,
               attempt,
               maxAttempts,
-              attempt == 2 && secondaryEndpoint != null ? secondaryEndpoint : primaryEndpoint);
-          sleepBackoff(attempt);
+              secondaryEndpoint != null && attempt % 2 == 0 ? secondaryEndpoint : primaryEndpoint,
+              providerDebugHeaders(e));
+          sleepBackoff(attempt, parseRetryAfterSeconds(e));
           continue;
         }
 
         metrics.providerUnavailable("x");
         log.warn(
-            "x userinfo failed: status={} endpoint={} body={}",
+            "x userinfo failed: status={} endpoint={} headers={} body={}",
             status,
-            attempt == 2 && secondaryEndpoint != null ? secondaryEndpoint : primaryEndpoint,
+            secondaryEndpoint != null && attempt % 2 == 0 ? secondaryEndpoint : primaryEndpoint,
+            providerDebugHeaders(e),
             sanitizeProviderBody(e.getResponseBodyAsString(StandardCharsets.UTF_8)));
 
         if (status == 401) {
@@ -191,7 +203,7 @@ public class XOAuthClient {
       } catch (Exception e) {
         if (attempt < maxAttempts) {
           log.warn("x userinfo transient exception: attempt={}/{} err={}", attempt, maxAttempts, e.toString());
-          sleepBackoff(attempt);
+          sleepBackoff(attempt, 0);
           continue;
         }
         metrics.providerUnavailable("x");
@@ -208,8 +220,8 @@ public class XOAuthClient {
     return status == 502 || status == 503 || status == 504;
   }
 
-  private static void sleepBackoff(int attempt) {
-    long ms = 200L * Math.max(1, attempt);
+  private static void sleepBackoff(int attempt, int retryAfterSeconds) {
+    long ms = backoffMs(attempt, retryAfterSeconds);
     try {
       Thread.sleep(ms);
     } catch (InterruptedException ignored) {
@@ -217,11 +229,99 @@ public class XOAuthClient {
     }
   }
 
+  private static long backoffMs(int attempt, int retryAfterSeconds) {
+    int cappedAttempt = Math.max(1, Math.min(6, attempt));
+    if (retryAfterSeconds > 0) {
+      long cappedSeconds = Math.min(15L, retryAfterSeconds);
+      return cappedSeconds * 1000L;
+    }
+    // Exponential backoff: 0.8s, 1.6s, 3.2s, 6.4s...
+    long ms = 800L * (1L << (cappedAttempt - 1));
+    return Math.min(10_000L, ms);
+  }
+
   private static String alternateUserinfoEndpoint(String endpoint) {
     if (endpoint == null || endpoint.isBlank()) return null;
     if (endpoint.contains("api.twitter.com")) return endpoint.replace("api.twitter.com", "api.x.com");
     if (endpoint.contains("api.x.com")) return endpoint.replace("api.x.com", "api.twitter.com");
     return null;
+  }
+
+  private static Map<String, String> providerDebugHeaders(WebClientResponseException e) {
+    if (e == null || e.getHeaders() == null) return Map.of();
+    Map<String, String> out = new LinkedHashMap<>();
+    addHeader(out, e, "x-transaction-id");
+    addHeader(out, e, "x-response-time");
+    addHeader(out, e, "x-rate-limit-limit");
+    addHeader(out, e, "x-rate-limit-remaining");
+    addHeader(out, e, "x-rate-limit-reset");
+    addHeader(out, e, HttpHeaders.RETRY_AFTER);
+    addHeader(out, e, "cf-ray");
+    addHeader(out, e, HttpHeaders.SERVER);
+    addHeader(out, e, "via");
+    addHeader(out, e, HttpHeaders.DATE);
+    addHeader(out, e, HttpHeaders.CONTENT_TYPE);
+    return out;
+  }
+
+  private static void addHeader(Map<String, String> out, WebClientResponseException e, String name) {
+    if (out == null || e == null || e.getHeaders() == null || name == null) return;
+    String v = e.getHeaders().getFirst(name);
+    if (v != null && !v.isBlank()) {
+      out.put(name, v.trim());
+    }
+  }
+
+  private static String tryExtractNumericUserIdFromJwt(String token) {
+    if (token == null) return null;
+    String t = token.trim();
+    if (t.isEmpty()) return null;
+    String[] parts = t.split("\\.");
+    if (parts.length != 3) return null;
+
+    byte[] payloadBytes = base64UrlDecode(parts[1]);
+    if (payloadBytes.length == 0) return null;
+
+    try {
+      JsonNode payload = JWT_MAPPER.readTree(payloadBytes);
+      if (payload == null) return null;
+      String[] candidates = {"sub", "user_id", "uid"};
+      for (String key : candidates) {
+        String v = payload.path(key).asText("").trim();
+        if (looksLikeNumericUserId(v)) return v;
+      }
+      return null;
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  private static boolean looksLikeNumericUserId(String value) {
+    if (value == null) return false;
+    String v = value.trim();
+    if (v.isEmpty() || v.length() > 32) return false;
+    for (int i = 0; i < v.length(); i++) {
+      char c = v.charAt(i);
+      if (c < '0' || c > '9') return false;
+    }
+    return true;
+  }
+
+  private static byte[] base64UrlDecode(String value) {
+    if (value == null) return new byte[0];
+    String v = value.trim();
+    if (v.isEmpty()) return new byte[0];
+
+    int mod = v.length() % 4;
+    if (mod == 2) v += "==";
+    else if (mod == 3) v += "=";
+    else if (mod != 0) return new byte[0];
+
+    try {
+      return java.util.Base64.getUrlDecoder().decode(v);
+    } catch (IllegalArgumentException ignored) {
+      return new byte[0];
+    }
   }
 
   private static int parseRetryAfterSeconds(WebClientResponseException e) {
