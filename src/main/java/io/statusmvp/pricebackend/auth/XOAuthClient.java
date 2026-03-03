@@ -21,6 +21,7 @@ import org.springframework.web.util.UriComponentsBuilder;
 public class XOAuthClient {
   private static final Logger log = LoggerFactory.getLogger(XOAuthClient.class);
   private static final int MAX_LOG_BODY_CHARS = 800;
+  private static final String USER_AGENT = "Mozilla/5.0 (compatible; VeilWalletAuthBackend/1.0)";
   private final WebClient webClient;
   private final AuthProperties authProperties;
   private final AuthMetrics metrics;
@@ -76,6 +77,7 @@ public class XOAuthClient {
       }
       response =
           req.body(BodyInserters.fromFormData(form))
+              .header(HttpHeaders.USER_AGENT, USER_AGENT)
               .retrieve()
               .bodyToMono(JsonNode.class)
               .timeout(Duration.ofSeconds(10))
@@ -114,61 +116,96 @@ public class XOAuthClient {
 
   public String fetchUserId(String accessToken) {
     AuthProperties.X x = authProperties.getX();
-    JsonNode response;
-    try {
-      response =
-          webClient
-              .get()
-              .uri(x.getUserinfoEndpoint())
-              .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
-              .retrieve()
-              .bodyToMono(JsonNode.class)
-              .timeout(Duration.ofSeconds(10))
-              .block();
-    } catch (WebClientResponseException e) {
-      metrics.providerUnavailable("x");
-      int status = e.getRawStatusCode();
-      log.warn(
-          "x userinfo failed: status={} body={}",
-          status,
-          sanitizeProviderBody(e.getResponseBodyAsString(StandardCharsets.UTF_8)));
+    final int maxAttempts = 3;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        JsonNode response =
+            webClient
+                .get()
+                .uri(x.getUserinfoEndpoint())
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
+                .header(HttpHeaders.USER_AGENT, USER_AGENT)
+                .retrieve()
+                .bodyToMono(JsonNode.class)
+                .timeout(Duration.ofSeconds(6))
+                .block();
+        String userId = response == null ? "" : response.path("data").path("id").asText("");
+        if (userId.isBlank()) {
+          metrics.providerUnavailable("x");
+          throw new AuthException(
+              AuthErrorCode.PROVIDER_UNAVAILABLE, "x user id not found", 503, null, Map.of());
+        }
+        return userId;
+      } catch (WebClientResponseException e) {
+        int status = e.getRawStatusCode();
+        if (isTransientStatus(status) && attempt < maxAttempts) {
+          log.warn("x userinfo transient error: status={} attempt={}/{}", status, attempt, maxAttempts);
+          sleepBackoff(attempt);
+          continue;
+        }
 
-      if (status == 401) {
+        metrics.providerUnavailable("x");
+        log.warn(
+            "x userinfo failed: status={} body={}",
+            status,
+            sanitizeProviderBody(e.getResponseBodyAsString(StandardCharsets.UTF_8)));
+
+        if (status == 401) {
+          throw new AuthException(
+              AuthErrorCode.UNAUTHORIZED,
+              "x provider unauthorized",
+              502,
+              null,
+              Map.of("providerStatus", status));
+        }
+        if (status == 403) {
+          throw new AuthException(
+              AuthErrorCode.FORBIDDEN, "x provider forbidden", 502, null, Map.of("providerStatus", status));
+        }
+        if (status == 429) {
+          int retryAfter = parseRetryAfterSeconds(e);
+          throw new AuthException(
+              AuthErrorCode.RATE_LIMITED,
+              "x rate limited",
+              429,
+              retryAfter > 0 ? retryAfter : null,
+              Map.of("providerStatus", status, "scope", "x"));
+        }
         throw new AuthException(
-            AuthErrorCode.UNAUTHORIZED,
-            "x provider unauthorized",
-            502,
+            AuthErrorCode.PROVIDER_UNAVAILABLE,
+            "x provider unavailable",
+            503,
             null,
             Map.of("providerStatus", status));
-      }
-      if (status == 403) {
+      } catch (AuthException e) {
+        throw e;
+      } catch (Exception e) {
+        if (attempt < maxAttempts) {
+          log.warn("x userinfo transient exception: attempt={}/{} err={}", attempt, maxAttempts, e.toString());
+          sleepBackoff(attempt);
+          continue;
+        }
+        metrics.providerUnavailable("x");
+        log.warn("x userinfo failed: {}", e.toString());
         throw new AuthException(
-            AuthErrorCode.FORBIDDEN, "x provider forbidden", 502, null, Map.of("providerStatus", status));
+            AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, null, Map.of());
       }
-      if (status == 429) {
-        int retryAfter = parseRetryAfterSeconds(e);
-        throw new AuthException(
-            AuthErrorCode.RATE_LIMITED,
-            "x rate limited",
-            429,
-            retryAfter > 0 ? retryAfter : null,
-            Map.of("providerStatus", status, "scope", "x"));
-      }
-      throw new AuthException(
-          AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, null, Map.of("providerStatus", status));
-    } catch (Exception e) {
-      metrics.providerUnavailable("x");
-      log.warn("x userinfo failed: {}", e.toString());
-      throw new AuthException(
-          AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, null, Map.of());
     }
-    String userId = response == null ? "" : response.path("data").path("id").asText("");
-    if (userId.isBlank()) {
-      metrics.providerUnavailable("x");
-      throw new AuthException(
-          AuthErrorCode.PROVIDER_UNAVAILABLE, "x user id not found", 503, null, Map.of());
+    metrics.providerUnavailable("x");
+    throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, null, Map.of());
+  }
+
+  private static boolean isTransientStatus(int status) {
+    return status == 502 || status == 503 || status == 504;
+  }
+
+  private static void sleepBackoff(int attempt) {
+    long ms = 200L * Math.max(1, attempt);
+    try {
+      Thread.sleep(ms);
+    } catch (InterruptedException ignored) {
+      Thread.currentThread().interrupt();
     }
-    return userId;
   }
 
   private static int parseRetryAfterSeconds(WebClientResponseException e) {

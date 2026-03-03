@@ -50,15 +50,24 @@ public class AuthController {
     return Mono.fromCallable(
             () -> {
               String ip = resolveClientIp(exchange);
-              AuthService.XCallbackResult result =
-                  authService.handleXCallback(code, state, error, errorDescription, ip, deviceId);
-              if (result.appRedirectUri() != null && !result.appRedirectUri().isBlank()) {
-                String location =
-                    authService.callbackRedirectUrl(
-                        result.appRedirectUri(), result.payload(), result.state());
-                return ResponseEntity.status(HttpStatus.FOUND).header(HttpHeaders.LOCATION, location).build();
+              try {
+                AuthService.XCallbackResult result =
+                    authService.handleXCallback(code, state, error, errorDescription, ip, deviceId);
+                if (result.appRedirectUri() != null && !result.appRedirectUri().isBlank()) {
+                  String location =
+                      authService.callbackRedirectUrl(
+                          result.appRedirectUri(), result.payload(), result.state());
+                  return ResponseEntity.status(HttpStatus.FOUND).header(HttpHeaders.LOCATION, location).build();
+                }
+                return ResponseEntity.ok(result.payload());
+              } catch (AuthException e) {
+                String appRedirectUri = authService.tryResolveXAppRedirectUri(state);
+                if (appRedirectUri != null && !appRedirectUri.isBlank()) {
+                  String location = authService.callbackErrorRedirectUrl(appRedirectUri, e, state);
+                  return ResponseEntity.status(HttpStatus.FOUND).header(HttpHeaders.LOCATION, location).build();
+                }
+                throw e;
               }
-              return ResponseEntity.ok(result.payload());
             })
         .subscribeOn(Schedulers.boundedElastic());
   }

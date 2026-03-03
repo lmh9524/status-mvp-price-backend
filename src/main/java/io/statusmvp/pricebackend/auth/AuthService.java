@@ -404,6 +404,38 @@ public class AuthService {
     return b.build(true).toUriString();
   }
 
+  public String tryResolveXAppRedirectUri(String state) {
+    String stateSecret = authProperties.getX().getStateSecret();
+    if (!StringUtils.hasText(stateSecret)) return null;
+    if (!XOAuthStateTokens.looksLikeToken(state)) return null;
+
+    XOAuthStateTokens.Parsed parsed =
+        XOAuthStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
+    if (parsed == null) return null;
+    String appRedirectUri = parsed.appRedirectUri();
+    if (!StringUtils.hasText(appRedirectUri)) return null;
+    try {
+      validateAppRedirect(appRedirectUri);
+    } catch (Exception ignored) {
+      return null;
+    }
+    return appRedirectUri;
+  }
+
+  public String callbackErrorRedirectUrl(String appRedirectUri, AuthException error, String state) {
+    UriComponentsBuilder b =
+        UriComponentsBuilder.fromUriString(appRedirectUri)
+            .queryParam("errorCode", error == null ? "UNKNOWN" : error.getCode().name())
+            .queryParam("errorDescription", error == null ? "unknown error" : error.getMessage());
+    if (error != null && error.getRetryAfterSeconds() != null && error.getRetryAfterSeconds() > 0) {
+      b = b.queryParam("retryAfterSeconds", error.getRetryAfterSeconds());
+    }
+    if (StringUtils.hasText(state)) {
+      b = b.queryParam("state", state);
+    }
+    return b.build(true).toUriString();
+  }
+
   private SyncFavorites mergeFavorites(
       SyncFavorites current, List<FavoriteItem> incoming, Long incomingUpdatedAt) {
     Map<String, FavoriteItem> merged = new LinkedHashMap<>();
