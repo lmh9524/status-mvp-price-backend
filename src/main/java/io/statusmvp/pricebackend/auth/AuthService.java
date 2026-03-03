@@ -433,7 +433,7 @@ public class AuthService {
     if (StringUtils.hasText(state)) {
       b = b.queryParam("state", state);
     }
-    return b.build(true).toUriString();
+    return b.build().encode().toUriString();
   }
 
   private SyncFavorites mergeFavorites(
