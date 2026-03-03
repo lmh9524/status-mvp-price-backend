@@ -24,6 +24,8 @@ public class XOAuthClient {
   private static final Logger log = LoggerFactory.getLogger(XOAuthClient.class);
   private static final int MAX_LOG_BODY_CHARS = 800;
   private static final String USER_AGENT = "Mozilla/5.0 (compatible; VeilWalletAuthBackend/1.0)";
+  private static final String V1_VERIFY_CREDENTIALS_ENDPOINT =
+      "https://api.twitter.com/1.1/account/verify_credentials.json?skip_status=true&include_email=false";
   private static final ObjectMapper JWT_MAPPER = new ObjectMapper();
   private final WebClient webClient;
   private final AuthProperties authProperties;
@@ -224,8 +226,79 @@ public class XOAuthClient {
       }
     }
 
+    // Fallback: try v1.1 verify_credentials (some environments intermittently 503 on /2/users/me).
+    if (last != null && last.getCode() == AuthErrorCode.PROVIDER_UNAVAILABLE) {
+      try {
+        String v1UserId = fetchUserIdViaV1VerifyCredentials(accessToken);
+        if (v1UserId != null && !v1UserId.isBlank()) {
+          return v1UserId;
+        }
+      } catch (AuthException e) {
+        throw e;
+      } catch (Exception e) {
+        log.warn("x v1 verify_credentials failed: {}", e.toString());
+      }
+    }
+
     if (last != null) throw last;
     throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, 3, Map.of());
+  }
+
+  private String fetchUserIdViaV1VerifyCredentials(String accessToken) {
+    try {
+      JsonNode response =
+          webClient
+              .get()
+              .uri(V1_VERIFY_CREDENTIALS_ENDPOINT)
+              .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
+              .header(HttpHeaders.USER_AGENT, USER_AGENT)
+              .retrieve()
+              .bodyToMono(JsonNode.class)
+              .timeout(Duration.ofSeconds(5))
+              .block();
+      if (response == null) {
+        metrics.providerUnavailable("x");
+        throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, 3, Map.of());
+      }
+      String idStr = response.path("id_str").asText("").trim();
+      if (!idStr.isBlank()) return idStr;
+      String id = response.path("id").asText("").trim();
+      if (!id.isBlank()) return id;
+      metrics.providerUnavailable("x");
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x user id not found", 503, 3, Map.of());
+    } catch (WebClientResponseException e) {
+      int status = e.getRawStatusCode();
+      metrics.providerUnavailable("x");
+      log.warn(
+          "x v1 verify_credentials failed: status={} headers={} body={}",
+          status,
+          providerDebugHeaders(e),
+          sanitizeProviderBody(e.getResponseBodyAsString(StandardCharsets.UTF_8)));
+
+      if (status == 401) {
+        throw new AuthException(
+            AuthErrorCode.UNAUTHORIZED, "x provider unauthorized", 502, null, Map.of("providerStatus", status));
+      }
+      if (status == 403) {
+        throw new AuthException(
+            AuthErrorCode.FORBIDDEN, "x provider forbidden", 502, null, Map.of("providerStatus", status));
+      }
+      if (status == 429) {
+        int retryAfter = parseRetryAfterSeconds(e, true);
+        throw new AuthException(
+            AuthErrorCode.RATE_LIMITED,
+            "x rate limited",
+            429,
+            retryAfter > 0 ? retryAfter : null,
+            Map.of("providerStatus", status, "scope", "x"));
+      }
+      throw new AuthException(
+          AuthErrorCode.PROVIDER_UNAVAILABLE,
+          "x provider unavailable",
+          503,
+          3,
+          Map.of("providerStatus", status));
+    }
   }
 
   private static boolean isTransientStatus(int status) {
