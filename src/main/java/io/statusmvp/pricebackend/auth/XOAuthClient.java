@@ -31,7 +31,7 @@ public class XOAuthClient {
   private final AuthProperties authProperties;
   private final AuthMetrics metrics;
 
-  public record TokenExchangeResult(String accessToken, String idToken) {}
+  public record TokenExchangeResult(String accessToken, String refreshToken, String idToken) {}
 
   public XOAuthClient(WebClient webClient, AuthProperties authProperties, AuthMetrics metrics) {
     this.webClient = webClient;
@@ -118,9 +118,11 @@ public class XOAuthClient {
       throw new AuthException(
           AuthErrorCode.OAUTH_EXCHANGE_FAILED, "x oauth missing access token", 502, null, Map.of());
     }
+    String refreshToken = response.path("refresh_token").asText("");
+    if (refreshToken != null && refreshToken.isBlank()) refreshToken = null;
     String idToken = response.path("id_token").asText("");
     if (idToken != null && idToken.isBlank()) idToken = null;
-    return new TokenExchangeResult(accessToken, idToken);
+    return new TokenExchangeResult(accessToken, refreshToken, idToken);
   }
 
   public String exchangeCodeForAccessToken(String code, String codeVerifier) {
