@@ -15,6 +15,7 @@ import org.springframework.stereotype.Service;
 @Service
 public class AuthRedisStore {
   private static final String PREFIX_OAUTH_STATE = "auth:oauth:state:";
+  private static final String PREFIX_OAUTH_STATE_DEVICE = "auth:oauth:state_device:";
   private static final String PREFIX_AUTH_CODE = "auth:code:";
   private static final String PREFIX_AUTH_CODE_USED = "auth:code:used:";
   private static final String PREFIX_PROVIDER_TO_WALLET = "auth:provider:";
@@ -40,6 +41,26 @@ public class AuthRedisStore {
     Optional<OAuthStateRecord> out = getJson(key, OAuthStateRecord.class);
     redis.delete(key);
     return out;
+  }
+
+  public void putOAuthStateDevice(String state, String deviceId, long ttlSeconds) {
+    if (state == null || state.isBlank()) return;
+    if (deviceId == null || deviceId.isBlank()) return;
+    redis
+        .opsForValue()
+        .set(
+            PREFIX_OAUTH_STATE_DEVICE + state,
+            deviceId.trim(),
+            Duration.ofSeconds(Math.max(1, ttlSeconds)));
+  }
+
+  public Optional<String> consumeOAuthStateDevice(String state) {
+    if (state == null || state.isBlank()) return Optional.empty();
+    String key = PREFIX_OAUTH_STATE_DEVICE + state;
+    String out = redis.opsForValue().get(key);
+    redis.delete(key);
+    if (out == null || out.isBlank()) return Optional.empty();
+    return Optional.of(out.trim());
   }
 
   public void putAuthCode(AuthCodeRecord record, long ttlSeconds) {

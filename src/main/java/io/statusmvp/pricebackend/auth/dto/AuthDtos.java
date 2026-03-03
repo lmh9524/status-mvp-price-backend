@@ -14,6 +14,8 @@ public final class AuthDtos {
 
   public record XStartResponse(String authorizeUrl, String state, long expiresInSeconds) {}
 
+  public record XResumeRequest(@NotBlank String resumeToken) {}
+
   public record AuthCodeResponse(
       String provider,
       String providerUserId,

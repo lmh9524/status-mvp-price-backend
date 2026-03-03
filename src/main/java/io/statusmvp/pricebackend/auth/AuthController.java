@@ -34,8 +34,10 @@ public class AuthController {
   }
 
   @GetMapping(path = "/api/v1/auth/x/start", produces = MediaType.APPLICATION_JSON_VALUE)
-  public Mono<AuthDtos.XStartResponse> startX(@RequestParam(value = "appRedirectUri", required = false) String appRedirectUri) {
-    return Mono.fromCallable(() -> authService.startXLogin(appRedirectUri))
+  public Mono<AuthDtos.XStartResponse> startX(
+      @RequestParam(value = "appRedirectUri", required = false) String appRedirectUri,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+    return Mono.fromCallable(() -> authService.startXLogin(appRedirectUri, deviceId))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -69,6 +71,15 @@ public class AuthController {
                 throw e;
               }
             })
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @PostMapping(path = "/api/v1/auth/x/resume", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.AuthCodeResponse> xResume(
+      @Valid @RequestBody AuthDtos.XResumeRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(() -> authService.resumeXLogin(request.resumeToken(), resolveClientIp(exchange), deviceId))
         .subscribeOn(Schedulers.boundedElastic());
   }
 

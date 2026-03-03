@@ -53,6 +53,16 @@ public class AuthRiskService {
     }
   }
 
+  public void checkLoginDeviceRateLimit(String deviceId) {
+    if (deviceId == null || deviceId.isBlank()) return;
+    int windowSeconds = Math.max(1, authProperties.getRisk().getWindowSeconds());
+    checkLimit(
+        "login-device",
+        key("login:device", normalizeKey(deviceId)),
+        Math.max(1, authProperties.getRisk().getLoginDeviceLimit()),
+        windowSeconds);
+  }
+
   public void checkBindRateLimit(String walletSub) {
     int windowSeconds = Math.max(1, authProperties.getRisk().getWindowSeconds());
     checkLimit(

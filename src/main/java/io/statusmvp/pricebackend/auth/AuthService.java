@@ -61,7 +61,7 @@ public class AuthService {
     this.objectMapper = objectMapper;
   }
 
-  public AuthDtos.XStartResponse startXLogin(String appRedirectUri) {
+  public AuthDtos.XStartResponse startXLogin(String appRedirectUri, String deviceId) {
     ensureAuthEnabled();
     ensureXEnabled();
     validateXConfig();
@@ -98,6 +98,8 @@ public class AuthService {
               now + authProperties.getOauthStateTtlSeconds() * 1000);
       store.putOAuthState(stateRecord, authProperties.getOauthStateTtlSeconds());
     }
+
+    store.putOAuthStateDevice(state, deviceId, authProperties.getOauthStateTtlSeconds());
     return new AuthDtos.XStartResponse(
         xOAuthClient.buildAuthorizeUrl(state, codeChallenge), state,
         authProperties.getOauthStateTtlSeconds());
@@ -118,6 +120,7 @@ public class AuthService {
 
     String appRedirectUri;
     String codeVerifier;
+    String effectiveDeviceId = emptyToNull(deviceId);
 
     String stateSecret = authProperties.getX().getStateSecret();
     if (StringUtils.hasText(stateSecret) && XOAuthStateTokens.looksLikeToken(state)) {
@@ -132,6 +135,9 @@ public class AuthService {
         throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
       }
       validateAppRedirect(appRedirectUri);
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
     } else {
       OAuthStateRecord stateRecord =
           store
@@ -145,6 +151,12 @@ public class AuthService {
       }
       appRedirectUri = stateRecord.appRedirectUri();
       codeVerifier = stateRecord.codeVerifier();
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    }
+    if (!StringUtils.hasText(deviceId) && StringUtils.hasText(effectiveDeviceId)) {
+      riskService.checkLoginDeviceRateLimit(effectiveDeviceId);
     }
     if (StringUtils.hasText(error)) {
       metrics.loginFailure("x", "oauth_error");
@@ -159,7 +171,31 @@ public class AuthService {
     }
 
     String accessToken = xOAuthClient.exchangeCodeForAccessToken(code, codeVerifier);
-    String providerUserId = xOAuthClient.fetchUserId(accessToken);
+    String providerUserId;
+    try {
+      providerUserId = xOAuthClient.fetchUserId(accessToken);
+    } catch (AuthException e) {
+      if (e.getCode() == AuthErrorCode.PROVIDER_UNAVAILABLE
+          && StringUtils.hasText(stateSecret)
+          && StringUtils.hasText(effectiveDeviceId)) {
+        try {
+          String resumeToken =
+              XOAuthResumeTokens.issue(
+                  objectMapper, stateSecret, effectiveDeviceId, accessToken, 600, now());
+          throw new AuthException(
+              AuthErrorCode.PROVIDER_UNAVAILABLE,
+              e.getMessage(),
+              503,
+              3,
+              Map.of(
+                  "resumeToken", resumeToken,
+                  "providerStatus", e.getDetails().getOrDefault("providerStatus", 0)));
+        } catch (Exception ignored) {
+          // fallthrough to original exception
+        }
+      }
+      throw e;
+    }
     String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
@@ -174,6 +210,45 @@ public class AuthService {
             authProperties.getOneTimeCodeTtlSeconds()),
         appRedirectUri,
         state);
+  }
+
+  public AuthDtos.AuthCodeResponse resumeXLogin(String resumeToken, String ip, String deviceId) {
+    ensureAuthEnabled();
+    ensureXEnabled();
+    validateXConfig();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    if (!StringUtils.hasText(deviceId)) {
+      throw new AuthException(AuthErrorCode.UNAUTHORIZED, "missing device id", 401);
+    }
+
+    String stateSecret = authProperties.getX().getStateSecret();
+    if (!StringUtils.hasText(stateSecret)) {
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x oauth not configured", 503);
+    }
+
+    XOAuthResumeTokens.Parsed parsed =
+        XOAuthResumeTokens.parseAndDecrypt(objectMapper, stateSecret, resumeToken, now());
+    if (parsed == null) {
+      throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth resume token invalid", 401);
+    }
+    if (parsed.deviceId() != null && !deviceId.trim().equals(parsed.deviceId().trim())) {
+      throw new AuthException(AuthErrorCode.UNAUTHORIZED, "invalid device id", 401);
+    }
+
+    String providerUserId = xOAuthClient.fetchUserId(parsed.accessToken());
+    String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
+    riskService.checkProviderAllowed(providerSub);
+
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.X, providerUserId, providerSub);
+    metrics.loginSuccess("x");
+    return new AuthDtos.AuthCodeResponse(
+        AuthProvider.X.code(),
+        providerUserId,
+        providerSub,
+        authCode.code(),
+        authProperties.getOneTimeCodeTtlSeconds());
   }
 
   public AuthDtos.AuthCodeResponse telegramLogin(
@@ -432,6 +507,12 @@ public class AuthService {
     }
     if (StringUtils.hasText(state)) {
       b = b.queryParam("state", state);
+    }
+    if (error != null && error.getDetails() != null) {
+      Object resumeToken = error.getDetails().get("resumeToken");
+      if (resumeToken instanceof String s && StringUtils.hasText(s)) {
+        b = b.queryParam("resumeToken", s);
+      }
     }
     return b.build().encode().toUriString();
   }
