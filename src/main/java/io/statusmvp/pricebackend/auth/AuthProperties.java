@@ -277,7 +277,7 @@ public class AuthProperties {
      * Keep this value the same across all nodes.
      */
     private String stateSecret = "";
-    private String scopes = "tweet.read users.read offline.access";
+    private String scopes = "tweet.read users.read offline.access openid";
     private String authorizeEndpoint = "https://twitter.com/i/oauth2/authorize";
     private String tokenEndpoint = "https://api.twitter.com/2/oauth2/token";
     private String userinfoEndpoint = "https://api.twitter.com/2/users/me";

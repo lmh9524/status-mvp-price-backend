@@ -31,6 +31,8 @@ public class XOAuthClient {
   private final AuthProperties authProperties;
   private final AuthMetrics metrics;
 
+  public record TokenExchangeResult(String accessToken, String idToken) {}
+
   public XOAuthClient(WebClient webClient, AuthProperties authProperties, AuthMetrics metrics) {
     this.webClient = webClient;
     this.authProperties = authProperties;
@@ -53,7 +55,7 @@ public class XOAuthClient {
         .toUriString();
   }
 
-  public String exchangeCodeForAccessToken(String code, String codeVerifier) {
+  public TokenExchangeResult exchangeCodeForTokens(String code, String codeVerifier) {
     AuthProperties.X x = authProperties.getX();
     MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
     form.add("grant_type", "authorization_code");
@@ -116,7 +118,18 @@ public class XOAuthClient {
       throw new AuthException(
           AuthErrorCode.OAUTH_EXCHANGE_FAILED, "x oauth missing access token", 502, null, Map.of());
     }
-    return accessToken;
+    String idToken = response.path("id_token").asText("");
+    if (idToken != null && idToken.isBlank()) idToken = null;
+    return new TokenExchangeResult(accessToken, idToken);
+  }
+
+  public String exchangeCodeForAccessToken(String code, String codeVerifier) {
+    return exchangeCodeForTokens(code, codeVerifier).accessToken();
+  }
+
+  public String tryExtractUserIdFromIdToken(String idToken) {
+    if (idToken == null || idToken.isBlank()) return null;
+    return tryExtractNumericUserIdFromJwt(idToken);
   }
 
   public String fetchUserId(String accessToken) {
@@ -234,7 +247,8 @@ public class XOAuthClient {
           return v1UserId;
         }
       } catch (AuthException e) {
-        throw e;
+        // Treat as best-effort only; never override the primary userinfo failure reason.
+        log.warn("x v1 verify_credentials auth error: code={} msg={}", e.getCode(), e.getMessage());
       } catch (Exception e) {
         log.warn("x v1 verify_credentials failed: {}", e.toString());
       }

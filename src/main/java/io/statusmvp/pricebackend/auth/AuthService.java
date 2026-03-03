@@ -170,31 +170,35 @@ public class AuthService {
       throw new AuthException(AuthErrorCode.OAUTH_EXCHANGE_FAILED, "x oauth code missing", 400);
     }
 
-    String accessToken = xOAuthClient.exchangeCodeForAccessToken(code, codeVerifier);
-    String providerUserId;
-    try {
-      providerUserId = xOAuthClient.fetchUserId(accessToken);
-    } catch (AuthException e) {
-      if (e.getCode() == AuthErrorCode.PROVIDER_UNAVAILABLE
-          && StringUtils.hasText(stateSecret)
-          && StringUtils.hasText(effectiveDeviceId)) {
-        try {
-          String resumeToken =
-              XOAuthResumeTokens.issue(
-                  objectMapper, stateSecret, effectiveDeviceId, accessToken, 600, now());
-          throw new AuthException(
-              AuthErrorCode.PROVIDER_UNAVAILABLE,
-              e.getMessage(),
-              503,
-              e.getRetryAfterSeconds() == null ? 3 : e.getRetryAfterSeconds(),
-              Map.of(
-                  "resumeToken", resumeToken,
-                  "providerStatus", e.getDetails().getOrDefault("providerStatus", 0)));
-        } catch (Exception ignored) {
-          // fallthrough to original exception
+    XOAuthClient.TokenExchangeResult tokens = xOAuthClient.exchangeCodeForTokens(code, codeVerifier);
+    String accessToken = tokens.accessToken();
+
+    String providerUserId = xOAuthClient.tryExtractUserIdFromIdToken(tokens.idToken());
+    if (!StringUtils.hasText(providerUserId)) {
+      try {
+        providerUserId = xOAuthClient.fetchUserId(accessToken);
+      } catch (AuthException e) {
+        if (e.getCode() == AuthErrorCode.PROVIDER_UNAVAILABLE
+            && StringUtils.hasText(stateSecret)
+            && StringUtils.hasText(effectiveDeviceId)) {
+          try {
+            String resumeToken =
+                XOAuthResumeTokens.issue(
+                    objectMapper, stateSecret, effectiveDeviceId, accessToken, 600, now());
+            throw new AuthException(
+                AuthErrorCode.PROVIDER_UNAVAILABLE,
+                e.getMessage(),
+                503,
+                e.getRetryAfterSeconds() == null ? 3 : e.getRetryAfterSeconds(),
+                Map.of(
+                    "resumeToken", resumeToken,
+                    "providerStatus", e.getDetails().getOrDefault("providerStatus", 0)));
+          } catch (Exception ignored) {
+            // fallthrough to original exception
+          }
         }
+        throw e;
       }
-      throw e;
     }
     String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
     riskService.checkProviderAllowed(providerSub);
