@@ -172,8 +172,8 @@ public class XOAuthClient {
   }
 
   private static int parseRetryAfterSeconds(WebClientResponseException e) {
-    if (e == null || e.getResponseHeaders() == null) return 0;
-    String retryAfter = e.getResponseHeaders().getFirst(HttpHeaders.RETRY_AFTER);
+    if (e == null || e.getHeaders() == null) return 0;
+    String retryAfter = e.getHeaders().getFirst(HttpHeaders.RETRY_AFTER);
     if (retryAfter != null) {
       String trimmed = retryAfter.trim();
       if (trimmed.matches("\\d+")) {
@@ -186,7 +186,7 @@ public class XOAuthClient {
     }
 
     // X frequently uses x-rate-limit-reset (epoch seconds).
-    String reset = e.getResponseHeaders().getFirst("x-rate-limit-reset");
+    String reset = e.getHeaders().getFirst("x-rate-limit-reset");
     if (reset != null) {
       String trimmed = reset.trim();
       if (trimmed.matches("\\d+")) {
