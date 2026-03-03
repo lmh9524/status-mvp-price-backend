@@ -117,12 +117,15 @@ public class XOAuthClient {
   public String fetchUserId(String accessToken) {
     AuthProperties.X x = authProperties.getX();
     final int maxAttempts = 3;
+    final String primaryEndpoint = x.getUserinfoEndpoint();
+    final String secondaryEndpoint = alternateUserinfoEndpoint(primaryEndpoint);
     for (int attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
+        String endpoint = attempt == 2 && secondaryEndpoint != null ? secondaryEndpoint : primaryEndpoint;
         JsonNode response =
             webClient
                 .get()
-                .uri(x.getUserinfoEndpoint())
+                .uri(endpoint)
                 .header(HttpHeaders.AUTHORIZATION, "Bearer " + accessToken)
                 .header(HttpHeaders.USER_AGENT, USER_AGENT)
                 .retrieve()
@@ -139,15 +142,21 @@ public class XOAuthClient {
       } catch (WebClientResponseException e) {
         int status = e.getRawStatusCode();
         if (isTransientStatus(status) && attempt < maxAttempts) {
-          log.warn("x userinfo transient error: status={} attempt={}/{}", status, attempt, maxAttempts);
+          log.warn(
+              "x userinfo transient error: status={} attempt={}/{} endpoint={}",
+              status,
+              attempt,
+              maxAttempts,
+              attempt == 2 && secondaryEndpoint != null ? secondaryEndpoint : primaryEndpoint);
           sleepBackoff(attempt);
           continue;
         }
 
         metrics.providerUnavailable("x");
         log.warn(
-            "x userinfo failed: status={} body={}",
+            "x userinfo failed: status={} endpoint={} body={}",
             status,
+            attempt == 2 && secondaryEndpoint != null ? secondaryEndpoint : primaryEndpoint,
             sanitizeProviderBody(e.getResponseBodyAsString(StandardCharsets.UTF_8)));
 
         if (status == 401) {
@@ -206,6 +215,13 @@ public class XOAuthClient {
     } catch (InterruptedException ignored) {
       Thread.currentThread().interrupt();
     }
+  }
+
+  private static String alternateUserinfoEndpoint(String endpoint) {
+    if (endpoint == null || endpoint.isBlank()) return null;
+    if (endpoint.contains("api.twitter.com")) return endpoint.replace("api.twitter.com", "api.x.com");
+    if (endpoint.contains("api.x.com")) return endpoint.replace("api.x.com", "api.twitter.com");
+    return null;
   }
 
   private static int parseRetryAfterSeconds(WebClientResponseException e) {
