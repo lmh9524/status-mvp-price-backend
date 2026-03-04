@@ -2,6 +2,7 @@ package io.statusmvp.pricebackend.auth;
 
 import io.statusmvp.pricebackend.auth.dto.AuthDtos;
 import jakarta.validation.Valid;
+import java.util.Locale;
 import org.springframework.util.StringUtils;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -243,13 +244,28 @@ public class AuthController {
     if (!StringUtils.hasText(host)) {
       host = exchange.getRequest().getHeaders().getFirst("Host");
     }
+
     String scheme = StringUtils.hasText(forwardedProto) ? forwardedProto.trim() : exchange.getRequest().getURI().getScheme();
     if (!StringUtils.hasText(scheme)) scheme = "https";
+    if ("http".equalsIgnoreCase(scheme) && StringUtils.hasText(host) && !isLocalHost(host)) {
+      // In production, TLS is typically terminated at the proxy; the app still needs an https callback URL.
+      scheme = "https";
+    }
     if (!StringUtils.hasText(host)) {
       // Best-effort fallback; should not happen in real deployments.
       return scheme + "://localhost";
     }
     return scheme + "://" + host.trim();
+  }
+
+  private static boolean isLocalHost(String host) {
+    if (host == null) return true;
+    String h = host.trim().toLowerCase(Locale.ROOT);
+    if (h.startsWith("localhost")) return true;
+    if (h.startsWith("127.0.0.1")) return true;
+    if (h.startsWith("0.0.0.0")) return true;
+    if (h.endsWith(".local")) return true;
+    return false;
   }
 
   private static String telegramWidgetHtml(String botUsername, String callbackUrl) {
