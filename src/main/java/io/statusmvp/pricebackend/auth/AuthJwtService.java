@@ -64,7 +64,10 @@ public class AuthJwtService {
                   .build(),
               new JWTClaimsSet.Builder()
                   .issuer(authProperties.getWeb3auth().getIssuer())
-                  .audience(authProperties.getWeb3auth().getAudience())
+                  // Web3Auth dashboard validations often treat `aud` as a scalar string.
+                  // Nimbus defaults to emitting `aud` as a JSON array when using `.audience(...)`.
+                  // Emit it as a string for maximum compatibility.
+                  .claim("aud", authProperties.getWeb3auth().getAudience())
                   .subject(providerSub)
                   .issueTime(Date.from(now))
                   .expirationTime(Date.from(now.plusSeconds(Math.max(30, ttlSeconds))))
