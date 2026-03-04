@@ -39,15 +39,35 @@ public final class AuthUtils {
 
   public static boolean isAllowedRedirect(String uri, List<String> prefixes) {
     if (uri == null || uri.isBlank()) return false;
+    if (prefixes == null || prefixes.isEmpty()) return false;
+
+    String normalized = uri.trim();
+    if (normalized.isEmpty()) return false;
+
     try {
-      URI parsed = URI.create(uri);
+      URI parsed = URI.create(normalized);
       if (parsed.getScheme() == null || parsed.getScheme().isBlank()) return false;
-      if (prefixes.isEmpty()) return false;
-      String normalized = uri.trim();
-      return prefixes.stream().anyMatch(normalized::startsWith);
     } catch (Exception e) {
       return false;
     }
+
+    for (String prefix : prefixes) {
+      if (prefix == null) continue;
+      String p = prefix.trim();
+      if (p.isEmpty()) continue;
+
+      if (normalized.equals(p)) return true;
+      if (p.endsWith("/") && normalized.startsWith(p)) return true;
+      if (!normalized.startsWith(p)) continue;
+      if (normalized.length() == p.length()) return true;
+
+      char next = normalized.charAt(p.length());
+      // Prevent prefix confusion like `https://example.com.evil` when allowlist has `https://example.com`.
+      // Allow common URL continuations for paths / queries / fragments.
+      if (next == '/' || next == '?' || next == '#') return true;
+    }
+
+    return false;
   }
 
   public static String normalizeIp(String ip) {
