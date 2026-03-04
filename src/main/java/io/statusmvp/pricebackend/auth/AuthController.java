@@ -87,7 +87,7 @@ public class AuthController {
       @RequestParam(value = "hash", required = false) String hash,
       @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
       ServerWebExchange exchange) {
-    return Mono.fromCallable(
+    return Mono.<ResponseEntity<?>>fromCallable(
             () -> {
               String ip = resolveClientIp(exchange);
               try {
