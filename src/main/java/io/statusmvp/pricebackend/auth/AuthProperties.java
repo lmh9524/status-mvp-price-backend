@@ -353,6 +353,7 @@ public class AuthProperties {
 
   public static class Tg {
     private String botToken = "";
+    private String botUsername = "";
     private long authMaxAgeSeconds = 600;
 
     public String getBotToken() {
@@ -361,6 +362,14 @@ public class AuthProperties {
 
     public void setBotToken(String botToken) {
       this.botToken = botToken;
+    }
+
+    public String getBotUsername() {
+      return botUsername;
+    }
+
+    public void setBotUsername(String botUsername) {
+      this.botUsername = botUsername;
     }
 
     public long getAuthMaxAgeSeconds() {

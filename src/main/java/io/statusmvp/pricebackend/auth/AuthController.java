@@ -2,6 +2,7 @@ package io.statusmvp.pricebackend.auth;
 
 import io.statusmvp.pricebackend.auth.dto.AuthDtos;
 import jakarta.validation.Valid;
+import org.springframework.util.StringUtils;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -15,6 +16,7 @@ import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ServerWebExchange;
+import org.springframework.web.util.UriComponentsBuilder;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -38,6 +40,81 @@ public class AuthController {
       @RequestParam(value = "appRedirectUri", required = false) String appRedirectUri,
       @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
     return Mono.fromCallable(() -> authService.startXLogin(appRedirectUri, deviceId))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @GetMapping(path = "/api/v1/auth/tg/widget", produces = MediaType.TEXT_HTML_VALUE)
+  public Mono<ResponseEntity<String>> telegramWidget(
+      @RequestParam(value = "appRedirectUri") String appRedirectUri,
+      @RequestParam(value = "state", required = false) String state,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+              authService.validateTgWidgetRequest(appRedirectUri);
+              String botUsername = authService.telegramBotUsername();
+              if (!StringUtils.hasText(botUsername)) {
+                throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "telegram bot username not configured", 503);
+              }
+
+              String baseUrl = resolveExternalBaseUrl(exchange);
+              UriComponentsBuilder b =
+                  UriComponentsBuilder.fromHttpUrl(baseUrl)
+                      .path("/api/v1/auth/tg/widget/callback")
+                      .queryParam("appRedirectUri", appRedirectUri);
+              if (StringUtils.hasText(state)) {
+                b = b.queryParam("state", state);
+              }
+              String callbackUrl = b.build(true).toUriString();
+              String html = telegramWidgetHtml(botUsername.trim(), callbackUrl);
+              return ResponseEntity.ok()
+                  .contentType(MediaType.TEXT_HTML)
+                  .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                  .body(html);
+            })
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @GetMapping(path = "/api/v1/auth/tg/widget/callback", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<ResponseEntity<?>> telegramWidgetCallback(
+      @RequestParam(value = "appRedirectUri") String appRedirectUri,
+      @RequestParam(value = "state", required = false) String state,
+      @RequestParam(value = "id", required = false) String id,
+      @RequestParam(value = "first_name", required = false) String firstName,
+      @RequestParam(value = "last_name", required = false) String lastName,
+      @RequestParam(value = "username", required = false) String username,
+      @RequestParam(value = "photo_url", required = false) String photoUrl,
+      @RequestParam(value = "auth_date", required = false) String authDate,
+      @RequestParam(value = "hash", required = false) String hash,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+              String ip = resolveClientIp(exchange);
+              try {
+                AuthDtos.TelegramLoginRequest request =
+                    new AuthDtos.TelegramLoginRequest(
+                        id == null ? "" : id,
+                        firstName,
+                        lastName,
+                        username,
+                        photoUrl,
+                        authDate == null ? "" : authDate,
+                        hash == null ? "" : hash,
+                        appRedirectUri);
+                AuthDtos.AuthCodeResponse result = authService.telegramLogin(request, ip, deviceId);
+                String location = authService.callbackRedirectUrl(appRedirectUri, result, state);
+                return ResponseEntity.status(HttpStatus.FOUND).header(HttpHeaders.LOCATION, location).build();
+              } catch (AuthException e) {
+                try {
+                  authService.validateAppRedirectUri(appRedirectUri);
+                  String location = authService.callbackErrorRedirectUrl(appRedirectUri, e, state);
+                  return ResponseEntity.status(HttpStatus.FOUND).header(HttpHeaders.LOCATION, location).build();
+                } catch (Exception ignored) {
+                  // If redirect is invalid, fall back to JSON error below.
+                }
+                throw e;
+              }
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -153,5 +230,75 @@ public class AuthController {
     if (exchange.getRequest().getRemoteAddress() == null) return "";
     if (exchange.getRequest().getRemoteAddress().getAddress() == null) return "";
     return exchange.getRequest().getRemoteAddress().getAddress().getHostAddress();
+  }
+
+  private static String resolveExternalBaseUrl(ServerWebExchange exchange) {
+    String forwardedProto = exchange.getRequest().getHeaders().getFirst("X-Forwarded-Proto");
+    String forwardedHost = exchange.getRequest().getHeaders().getFirst("X-Forwarded-Host");
+    String host = forwardedHost;
+    if (host != null) {
+      int idx = host.indexOf(',');
+      if (idx > 0) host = host.substring(0, idx).trim();
+    }
+    if (!StringUtils.hasText(host)) {
+      host = exchange.getRequest().getHeaders().getFirst("Host");
+    }
+    String scheme = StringUtils.hasText(forwardedProto) ? forwardedProto.trim() : exchange.getRequest().getURI().getScheme();
+    if (!StringUtils.hasText(scheme)) scheme = "https";
+    if (!StringUtils.hasText(host)) {
+      // Best-effort fallback; should not happen in real deployments.
+      return scheme + "://localhost";
+    }
+    return scheme + "://" + host.trim();
+  }
+
+  private static String telegramWidgetHtml(String botUsername, String callbackUrl) {
+    String bot = escapeHtmlAttr(botUsername);
+    String cb = escapeHtmlAttr(callbackUrl);
+    return """
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>Telegram Login</title>
+            <style>
+              :root { color-scheme: light dark; }
+              body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 24px; }
+              .wrap { max-width: 520px; margin: 0 auto; }
+              h1 { font-size: 18px; margin: 0 0 12px; }
+              p { opacity: 0.85; line-height: 1.5; margin: 0 0 16px; }
+              .card { border: 1px solid rgba(127,127,127,0.35); border-radius: 14px; padding: 16px; }
+              .hint { font-size: 12px; opacity: 0.7; margin-top: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="wrap">
+              <h1>Continue with Telegram</h1>
+              <div class="card">
+                <p>Sign in with Telegram to continue.</p>
+                <script async src="https://telegram.org/js/telegram-widget.js?22"
+                  data-telegram-login="%s"
+                  data-size="large"
+                  data-userpic="false"
+                  data-request-access="write"
+                  data-auth-url="%s"></script>
+                <div class="hint">If you don't see the button, try opening in an external browser.</div>
+              </div>
+            </div>
+          </body>
+        </html>
+        """
+        .formatted(bot, cb);
+  }
+
+  private static String escapeHtmlAttr(String value) {
+    if (value == null) return "";
+    return value
+        .replace("&", "&amp;")
+        .replace("\"", "&quot;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace("'", "&#39;");
   }
 }

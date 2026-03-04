@@ -50,6 +50,7 @@ app:
       userinfoEndpoint: ${AUTH_X_USERINFO_ENDPOINT:https://api.twitter.com/2/users/me}
     tg:
       botToken: ${AUTH_TG_BOT_TOKEN:}
+      botUsername: ${AUTH_TG_BOT_USERNAME:}
       authMaxAgeSeconds: ${AUTH_TG_AUTH_MAX_AGE_SECONDS:600}
     risk:
       blacklistIps: ${AUTH_RISK_BLACKLIST_IPS:}

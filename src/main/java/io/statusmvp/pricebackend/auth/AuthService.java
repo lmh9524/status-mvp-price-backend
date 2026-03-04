@@ -105,6 +105,20 @@ public class AuthService {
         authProperties.getOauthStateTtlSeconds());
   }
 
+  public void validateAppRedirectUri(String appRedirectUri) {
+    validateAppRedirect(appRedirectUri);
+  }
+
+  public void validateTgWidgetRequest(String appRedirectUri) {
+    ensureAuthEnabled();
+    ensureTgEnabled();
+    validateAppRedirect(appRedirectUri);
+  }
+
+  public String telegramBotUsername() {
+    return emptyToNull(authProperties.getTg().getBotUsername());
+  }
+
   public XCallbackResult handleXCallback(
       String code,
       String state,
