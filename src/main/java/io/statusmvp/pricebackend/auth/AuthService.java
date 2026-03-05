@@ -7,10 +7,12 @@ import io.statusmvp.pricebackend.auth.model.HistoryItem;
 import io.statusmvp.pricebackend.auth.model.OAuthStateRecord;
 import io.statusmvp.pricebackend.auth.model.ProviderBinding;
 import io.statusmvp.pricebackend.auth.model.RefreshTokenRecord;
+import io.statusmvp.pricebackend.auth.model.SiweNonceRecord;
 import io.statusmvp.pricebackend.auth.model.SyncFavorites;
 import io.statusmvp.pricebackend.auth.model.SyncHistory;
 import io.statusmvp.pricebackend.auth.model.WalletProfile;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -358,6 +360,146 @@ public class AuthService {
         authProperties.getRefreshTokenTtlSeconds());
   }
 
+  public AuthDtos.Web3authJwtResponse web3authJwt(AuthDtos.ExchangeRequest request) {
+    ensureAuthEnabled();
+    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code());
+    String providerSub = codeRecord.providerSub();
+    String nonce = request.nonce();
+    String web3authJwt =
+        jwtService.issueWeb3AuthJwt(providerSub, nonce, authProperties.getWeb3authJwtTtlSeconds());
+    return new AuthDtos.Web3authJwtResponse(
+        codeRecord.provider(), codeRecord.providerUserId(), providerSub, web3authJwt);
+  }
+
+  public AuthDtos.SiweNonceResponse siweNonce(
+      AuthDtos.SiweNonceRequest request, String ip, String deviceId, String externalBaseUrl) {
+    ensureAuthEnabled();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    String address = normalizeEvmAddressLower(request.address());
+    String baseUrl = emptyToNull(externalBaseUrl);
+    if (baseUrl == null) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "missing base url", 400);
+    }
+
+    URI parsed;
+    try {
+      parsed = URI.create(baseUrl);
+    } catch (Exception e) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "invalid base url", 400);
+    }
+    String domain = emptyToNull(parsed.getHost());
+    if (domain == null) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "invalid base url", 400);
+    }
+
+    long now = now();
+    long ttlSeconds = Math.max(60, authProperties.getSiweNonceTtlSeconds());
+    String nonce = AuthUtils.randomBase64Url(24);
+    long expiresAt = now + ttlSeconds * 1000;
+    store.putSiweNonce(
+        new SiweNonceRecord(nonce, address, domain.trim(), baseUrl, now, expiresAt), ttlSeconds);
+
+    Instant issuedAt = Instant.ofEpochMilli(now);
+    Instant expirationTime = Instant.ofEpochMilli(expiresAt);
+    return new AuthDtos.SiweNonceResponse(
+        nonce,
+        domain.trim(),
+        baseUrl,
+        authProperties.getSiweStatement(),
+        1,
+        issuedAt.toString(),
+        expirationTime.toString());
+  }
+
+  public AuthDtos.SiweVerifyResponse siweVerify(
+      AuthDtos.SiweVerifyRequest request, String ip, String deviceId) {
+    ensureAuthEnabled();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    SiweUtils.ParsedSiwe parsed;
+    try {
+      parsed = SiweUtils.parseMessage(request.message());
+    } catch (IllegalArgumentException e) {
+      metrics.loginFailure("siwe", "message_invalid");
+      throw new AuthException(AuthErrorCode.SIWE_MESSAGE_INVALID, "invalid siwe message", 400);
+    }
+
+    if (parsed.chainId() != 1) {
+      metrics.loginFailure("siwe", "chain_unsupported");
+      throw new AuthException(AuthErrorCode.SIWE_MESSAGE_INVALID, "unsupported chain", 400);
+    }
+
+    String address = normalizeEvmAddressLower(parsed.address());
+    String nonce = parsed.nonce().trim();
+    SiweNonceRecord record =
+        store
+            .consumeSiweNonce(nonce)
+            .orElseThrow(
+                () -> {
+                  metrics.loginFailure("siwe", "nonce_invalid");
+                  return new AuthException(AuthErrorCode.SIWE_NONCE_INVALID, "invalid nonce", 401);
+                });
+
+    long now = now();
+    if (record.expiresAt() < now) {
+      metrics.loginFailure("siwe", "nonce_expired");
+      throw new AuthException(AuthErrorCode.SIWE_NONCE_EXPIRED, "nonce expired", 401);
+    }
+    if (!Objects.equals(record.address(), address)) {
+      metrics.loginFailure("siwe", "nonce_mismatch");
+      throw new AuthException(AuthErrorCode.SIWE_NONCE_INVALID, "invalid nonce", 401);
+    }
+    if (!Objects.equals(record.domain(), parsed.domain()) || !Objects.equals(record.uri(), parsed.uri())) {
+      metrics.loginFailure("siwe", "domain_mismatch");
+      throw new AuthException(AuthErrorCode.SIWE_MESSAGE_INVALID, "invalid siwe message", 400);
+    }
+    if (parsed.expirationTime().toEpochMilli() < now) {
+      metrics.loginFailure("siwe", "message_expired");
+      throw new AuthException(AuthErrorCode.SIWE_NONCE_EXPIRED, "nonce expired", 401);
+    }
+
+    String recovered;
+    try {
+      recovered = SiweUtils.recoverAddress(request.message(), request.signature());
+    } catch (IllegalArgumentException e) {
+      metrics.loginFailure("siwe", "sig_invalid");
+      throw new AuthException(AuthErrorCode.SIWE_SIGNATURE_INVALID, "invalid signature", 401);
+    }
+    if (!Objects.equals(recovered, address)) {
+      metrics.loginFailure("siwe", "sig_mismatch");
+      throw new AuthException(AuthErrorCode.SIWE_SIGNATURE_INVALID, "invalid signature", 401);
+    }
+
+    // Ensure a wallet profile exists for sync storage etc.
+    getOrCreateWallet(address);
+
+    String accessToken = jwtService.issueAccessToken(address, authProperties.getAccessTokenTtlSeconds());
+    String refreshToken = AuthUtils.randomBase64Url(48);
+
+    String refreshHash = jwtService.sha256Hex(refreshToken);
+    RefreshTokenRecord refreshRecord =
+        new RefreshTokenRecord(
+            UUID.randomUUID().toString(),
+            address,
+            refreshHash,
+            now,
+            now + authProperties.getRefreshTokenTtlSeconds() * 1000,
+            null,
+            null);
+    store.putRefreshToken(refreshRecord, authProperties.getRefreshTokenTtlSeconds());
+
+    metrics.loginSuccess("siwe");
+    return new AuthDtos.SiweVerifyResponse(
+        address,
+        accessToken,
+        refreshToken,
+        authProperties.getAccessTokenTtlSeconds(),
+        authProperties.getRefreshTokenTtlSeconds());
+  }
+
   public AuthDtos.RefreshResponse refresh(AuthDtos.RefreshRequest request) {
     ensureAuthEnabled();
     String tokenHash = jwtService.sha256Hex(request.refreshToken());
@@ -647,7 +789,23 @@ public class AuthService {
   }
 
   private WalletProfile getOrCreateWallet(String walletSub) {
-    return store.getWalletProfile(walletSub).orElseGet(() -> WalletProfile.create(walletSub, now()));
+    return store
+        .getWalletProfile(walletSub)
+        .orElseGet(
+            () -> {
+              WalletProfile created = WalletProfile.create(walletSub, now());
+              store.putWalletProfile(created);
+              return created;
+            });
+  }
+
+  private static String normalizeEvmAddressLower(String input) {
+    String raw = input == null ? "" : input.trim();
+    String hex = raw.startsWith("0x") || raw.startsWith("0X") ? raw.substring(2) : raw;
+    if (hex.length() != 40 || !hex.matches("^[0-9a-fA-F]{40}$")) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "invalid address", 400);
+    }
+    return ("0x" + hex).toLowerCase(Locale.ROOT);
   }
 
   private AuthCodeRecord consumeValidAuthCode(String code) {

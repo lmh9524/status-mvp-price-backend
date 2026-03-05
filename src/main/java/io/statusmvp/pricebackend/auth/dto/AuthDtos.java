@@ -65,6 +65,32 @@ public final class AuthDtos {
       @JsonAlias("app_redirect_uri")
       String appRedirectUri) {}
 
+  public record Web3authJwtResponse(
+      String provider,
+      String providerUserId,
+      String providerSub,
+      String web3authJwt) {}
+
+  public record SiweNonceRequest(@NotBlank String address) {}
+
+  public record SiweNonceResponse(
+      String nonce,
+      String domain,
+      String uri,
+      String statement,
+      long chainId,
+      String issuedAt,
+      String expirationTime) {}
+
+  public record SiweVerifyRequest(@NotBlank String message, @NotBlank String signature) {}
+
+  public record SiweVerifyResponse(
+      String walletSub,
+      String accessToken,
+      String refreshToken,
+      long accessTokenExpiresInSeconds,
+      long refreshTokenExpiresInSeconds) {}
+
   public record SyncPayloadInput(
       List<FavoriteItem> favorites, Long favoritesUpdatedAt, List<HistoryItem> history, Long historyUpdatedAt) {}
 

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.statusmvp.pricebackend.auth.model.AuthCodeRecord;
 import io.statusmvp.pricebackend.auth.model.OAuthStateRecord;
 import io.statusmvp.pricebackend.auth.model.RefreshTokenRecord;
+import io.statusmvp.pricebackend.auth.model.SiweNonceRecord;
 import io.statusmvp.pricebackend.auth.model.WalletProfile;
 import java.time.Duration;
 import java.util.Optional;
@@ -22,6 +23,7 @@ public class AuthRedisStore {
   private static final String PREFIX_WALLET = "auth:wallet:";
   private static final String PREFIX_REFRESH = "auth:refresh:";
   private static final String PREFIX_JTI = "auth:jti:";
+  private static final String PREFIX_SIWE_NONCE = "auth:siwe:nonce:";
 
   private final StringRedisTemplate redis;
   private final ObjectMapper objectMapper;
@@ -123,6 +125,18 @@ public class AuthRedisStore {
 
   public void putRefreshToken(RefreshTokenRecord record, long ttlSeconds) {
     putJson(PREFIX_REFRESH + record.tokenHash(), record, ttlSeconds);
+  }
+
+  public void putSiweNonce(SiweNonceRecord record, long ttlSeconds) {
+    putJson(PREFIX_SIWE_NONCE + record.nonce(), record, ttlSeconds);
+  }
+
+  public Optional<SiweNonceRecord> consumeSiweNonce(String nonce) {
+    if (nonce == null || nonce.isBlank()) return Optional.empty();
+    String key = PREFIX_SIWE_NONCE + nonce;
+    Optional<SiweNonceRecord> out = getJson(key, SiweNonceRecord.class);
+    redis.delete(key);
+    return out;
   }
 
   public Optional<RefreshTokenRecord> getRefreshTokenByHash(String tokenHash) {

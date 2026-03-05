@@ -20,6 +20,8 @@ app:
     web3authJwtTtlSeconds: ${AUTH_WEB3AUTH_JWT_TTL_SECONDS:300}
     accessTokenTtlSeconds: ${AUTH_ACCESS_TOKEN_TTL_SECONDS:900}
     refreshTokenTtlSeconds: ${AUTH_REFRESH_TOKEN_TTL_SECONDS:2592000}
+    siweNonceTtlSeconds: ${AUTH_SIWE_NONCE_TTL_SECONDS:600}
+    siweStatement: ${AUTH_SIWE_STATEMENT:VeilWallet wants you to sign in.}
     xEnabled: ${AUTH_X_ENABLED:true}
     tgEnabled: ${AUTH_TG_ENABLED:true}
     syncEnabled: ${AUTH_SYNC_ENABLED:true}

@@ -177,6 +177,37 @@ public class AuthController {
         .subscribeOn(Schedulers.boundedElastic());
   }
 
+  @PostMapping(path = "/api/v1/auth/web3auth/jwt", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.Web3authJwtResponse> web3authJwt(
+      @Valid @RequestBody AuthDtos.ExchangeRequest request) {
+    return Mono.fromCallable(() -> authService.web3authJwt(request))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @PostMapping(path = "/api/v1/auth/siwe/nonce", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.SiweNonceResponse> siweNonce(
+      @Valid @RequestBody AuthDtos.SiweNonceRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () ->
+                authService.siweNonce(
+                    request,
+                    resolveClientIp(exchange),
+                    deviceId,
+                    resolveExternalBaseUrl(exchange)))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @PostMapping(path = "/api/v1/auth/siwe/verify", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.SiweVerifyResponse> siweVerify(
+      @Valid @RequestBody AuthDtos.SiweVerifyRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(() -> authService.siweVerify(request, resolveClientIp(exchange), deviceId))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
   @PostMapping(path = "/api/v1/auth/refresh", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.RefreshResponse> refresh(@Valid @RequestBody AuthDtos.RefreshRequest request) {
     return Mono.fromCallable(() -> authService.refresh(request))

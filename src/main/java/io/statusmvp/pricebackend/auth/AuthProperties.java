@@ -15,6 +15,8 @@ public class AuthProperties {
   private long web3authJwtTtlSeconds = 300;
   private long accessTokenTtlSeconds = 900;
   private long refreshTokenTtlSeconds = 2_592_000;
+  private long siweNonceTtlSeconds = 600;
+  private String siweStatement = "VeilWallet wants you to sign in.";
   private boolean xEnabled = true;
   private boolean tgEnabled = true;
   private boolean syncEnabled = true;
@@ -74,6 +76,22 @@ public class AuthProperties {
 
   public void setRefreshTokenTtlSeconds(long refreshTokenTtlSeconds) {
     this.refreshTokenTtlSeconds = refreshTokenTtlSeconds;
+  }
+
+  public long getSiweNonceTtlSeconds() {
+    return siweNonceTtlSeconds;
+  }
+
+  public void setSiweNonceTtlSeconds(long siweNonceTtlSeconds) {
+    this.siweNonceTtlSeconds = siweNonceTtlSeconds;
+  }
+
+  public String getSiweStatement() {
+    return siweStatement;
+  }
+
+  public void setSiweStatement(String siweStatement) {
+    this.siweStatement = siweStatement;
   }
 
   public boolean isXEnabled() {
