@@ -44,8 +44,9 @@ app:
       clientSecret: ${AUTH_X_CLIENT_SECRET:}
       redirectUri: ${AUTH_X_REDIRECT_URI:}
       stateSecret: ${AUTH_X_STATE_SECRET:}
-      # Include `openid` so X can return an id_token with a stable subject (avoids relying on /users/me for user id).
-      scopes: ${AUTH_X_SCOPES:openid tweet.read users.read offline.access}
+      # Minimal scopes for wallet login. We only need `users.read` to call /2/users/me.
+      # Keep this minimal: requesting unsupported scopes can cause `invalid_scope` during authorization.
+      scopes: ${AUTH_X_SCOPES:users.read}
       authorizeEndpoint: ${AUTH_X_AUTHORIZE_ENDPOINT:https://twitter.com/i/oauth2/authorize}
       tokenEndpoint: ${AUTH_X_TOKEN_ENDPOINT:https://api.twitter.com/2/oauth2/token}
       userinfoEndpoint: ${AUTH_X_USERINFO_ENDPOINT:https://api.twitter.com/2/users/me}

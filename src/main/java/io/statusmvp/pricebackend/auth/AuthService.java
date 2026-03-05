@@ -258,7 +258,35 @@ public class AuthService {
       throw new AuthException(AuthErrorCode.UNAUTHORIZED, "invalid device id", 401);
     }
 
-    String providerUserId = xOAuthClient.fetchUserId(parsed.accessToken());
+    // X userinfo may intermittently 503 from some regions. In resume flow (app->backend), we can afford
+    // a few short retries to improve UX without risking browser/proxy callback timeouts.
+    String providerUserId = null;
+    AuthException lastUnavailable = null;
+    long backoffMs = 350L;
+    final int maxAttempts = 5;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        providerUserId = xOAuthClient.fetchUserId(parsed.accessToken());
+        break;
+      } catch (AuthException e) {
+        if (e.getCode() != AuthErrorCode.PROVIDER_UNAVAILABLE) {
+          throw e;
+        }
+        lastUnavailable = e;
+        if (attempt >= maxAttempts) break;
+        try {
+          Thread.sleep(backoffMs);
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          break;
+        }
+        backoffMs = Math.min(2_000L, backoffMs * 2);
+      }
+    }
+    if (!StringUtils.hasText(providerUserId)) {
+      if (lastUnavailable != null) throw lastUnavailable;
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, 3, Map.of());
+    }
     String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
