@@ -193,15 +193,14 @@ public class AuthService {
         providerUserId = xOAuthClient.fetchUserId(accessToken);
       } catch (AuthException e) {
         if (e.getCode() == AuthErrorCode.PROVIDER_UNAVAILABLE) {
-          // Workaround: X userinfo (/2/users/me) intermittently 503 from some regions. When we have a refresh_token,
-          // derive a stable, non-reversible identifier from it so login can complete without userinfo.
-          if (StringUtils.hasText(tokens.refreshToken())) {
-            providerUserId = "rt_" + AuthUtils.sha256Base64Url(tokens.refreshToken());
-          } else if (StringUtils.hasText(stateSecret) && StringUtils.hasText(effectiveDeviceId)) {
+          // IMPORTANT: We must not mint an authCode with an unstable "provider user id" (e.g. refresh_token hash).
+          // Otherwise the same X account can map to different Web3Auth verifierIds across logins, producing different wallets.
+          //
+          // If X userinfo is temporarily unavailable, return a resumable error so the app can retry.
+          if (StringUtils.hasText(stateSecret) && StringUtils.hasText(effectiveDeviceId)) {
             try {
               String resumeToken =
-                  XOAuthResumeTokens.issue(
-                      objectMapper, stateSecret, effectiveDeviceId, accessToken, 600, now());
+                  XOAuthResumeTokens.issue(objectMapper, stateSecret, effectiveDeviceId, accessToken, 600, now());
               throw new AuthException(
                   AuthErrorCode.PROVIDER_UNAVAILABLE,
                   e.getMessage(),
