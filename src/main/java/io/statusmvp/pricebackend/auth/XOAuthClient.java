@@ -148,6 +148,8 @@ public class XOAuthClient {
     // IMPORTANT: Keep this call path fast (no long sleeps / retries). The browser callback is often
     // behind a reverse-proxy with strict timeouts; the app can retry using /api/v1/auth/x/resume.
     AuthException last = null;
+    AuthException unauthorized = null;
+    AuthException forbidden = null;
     String[] endpoints =
         secondaryEndpoint == null ? new String[] {primaryEndpoint} : new String[] {primaryEndpoint, secondaryEndpoint};
 
@@ -188,20 +190,24 @@ public class XOAuthClient {
             sanitizeProviderBody(e.getResponseBodyAsString(StandardCharsets.UTF_8)));
 
         if (status == 401) {
-          throw new AuthException(
-              AuthErrorCode.UNAUTHORIZED,
-              "x provider unauthorized",
-              502,
-              null,
-              Map.of("providerStatus", status));
+          unauthorized =
+              new AuthException(
+                  AuthErrorCode.UNAUTHORIZED,
+                  "x provider unauthorized",
+                  502,
+                  null,
+                  Map.of("providerStatus", status));
+          continue;
         }
         if (status == 403) {
-          throw new AuthException(
-              AuthErrorCode.FORBIDDEN,
-              "x provider forbidden",
-              502,
-              null,
-              Map.of("providerStatus", status));
+          forbidden =
+              new AuthException(
+                  AuthErrorCode.FORBIDDEN,
+                  "x provider forbidden",
+                  502,
+                  null,
+                  Map.of("providerStatus", status));
+          continue;
         }
         if (status == 429) {
           int retryAfter = parseRetryAfterSeconds(e, true);
@@ -240,6 +246,10 @@ public class XOAuthClient {
         last = new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, 3, Map.of());
       }
     }
+
+    // Prefer auth errors if every endpoint failed.
+    if (unauthorized != null) throw unauthorized;
+    if (forbidden != null) throw forbidden;
 
     // Fallback: try v1.1 verify_credentials (some environments intermittently 503 on /2/users/me).
     if (last != null && last.getCode() == AuthErrorCode.PROVIDER_UNAVAILABLE) {
