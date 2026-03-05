@@ -64,7 +64,7 @@ public class SiweUtilsTest {
         "0x"
             + Numeric.toHexStringNoPrefix(sig.getR())
             + Numeric.toHexStringNoPrefix(sig.getS())
-            + Numeric.toHexStringNoPrefix(new byte[] {sig.getV()});
+            + Numeric.toHexStringNoPrefix(sig.getV());
 
     String recovered = SiweUtils.recoverAddress(message, sigHex);
     assertEquals(address, recovered);
@@ -77,4 +77,3 @@ public class SiweUtilsTest {
         () -> SiweUtils.recoverAddress("hello", "0x1234"));
   }
 }
-
