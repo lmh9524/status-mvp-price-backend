@@ -35,6 +35,8 @@ public class SafeTxServiceGatewayController {
       new SafeTxServiceGatewayService.CachePolicy(10, 600, 2);
   private static final SafeTxServiceGatewayService.CachePolicy CONFIRMATIONS_CACHE =
       new SafeTxServiceGatewayService.CachePolicy(5, 120, 2);
+  private static final SafeTxServiceGatewayService.CachePolicy BALANCES_CACHE =
+      new SafeTxServiceGatewayService.CachePolicy(10, 120, 2);
 
   private final SafeTxServiceGatewayService gateway;
 
@@ -80,6 +82,24 @@ public class SafeTxServiceGatewayController {
     String c = normalizeChain(chain);
     return gateway.get(
         c, "/api/v1/safes/" + address + "/", null, resolveClientIp(exchange), deviceId, SAFE_INFO_CACHE);
+  }
+
+  @GetMapping({"/{chain}/api/v1/safes/{address}/balances", "/{chain}/api/v1/safes/{address}/balances/"})
+  public Mono<ResponseEntity<String>> listBalances(
+      @PathVariable("chain") String chain,
+      @PathVariable("address") @NotBlank String address,
+      @RequestParam(required = false) MultiValueMap<String, String> query,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    if (deviceId == null || deviceId.isBlank()) return missingDeviceId();
+    String c = normalizeChain(chain);
+    return gateway.get(
+        c,
+        "/api/v1/safes/" + address + "/balances/",
+        query,
+        resolveClientIp(exchange),
+        deviceId,
+        BALANCES_CACHE);
   }
 
   @GetMapping({"/{chain}/api/v2/safes/{address}/multisig-transactions", "/{chain}/api/v2/safes/{address}/multisig-transactions/"})
