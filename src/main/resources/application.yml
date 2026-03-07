@@ -13,6 +13,13 @@ app:
   cache:
     priceTtlSeconds: ${PRICE_CACHE_TTL_SECONDS:120}
     requestTtlSeconds: ${REQUEST_CACHE_TTL_SECONDS:30}
+  safe:
+    notifications:
+      enabled: ${SAFE_NOTIFICATIONS_ENABLED:true}
+      pollDelayMs: ${SAFE_NOTIFICATIONS_POLL_DELAY_MS:45000}
+      inboxLimit: ${SAFE_NOTIFICATIONS_INBOX_LIMIT:50}
+      pullDefaultLimit: ${SAFE_NOTIFICATIONS_PULL_DEFAULT_LIMIT:20}
+      queueTtlSeconds: ${SAFE_NOTIFICATIONS_QUEUE_TTL_SECONDS:1209600}
   auth:
     enabled: ${AUTH_ENABLED:true}
     oneTimeCodeTtlSeconds: ${AUTH_ONE_TIME_CODE_TTL_SECONDS:60}
