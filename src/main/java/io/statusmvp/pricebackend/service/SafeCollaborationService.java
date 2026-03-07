@@ -339,8 +339,7 @@ public class SafeCollaborationService {
                   .flatMap(
                       queueItem ->
                           fetchTransactionDetail(chain, queueItem.safeTxHash(), clientIp, deviceId)
-                              .map(detail -> classifyInboxItem(discoveryItem, detail))
-                              .map(item -> new InboxDetailResult(item, false))
+                              .map(detail -> new InboxDetailResult(classifyInboxItem(discoveryItem, detail), false))
                               .onErrorResume(
                                   error -> {
                                     hadDetailFailure[0] = true;

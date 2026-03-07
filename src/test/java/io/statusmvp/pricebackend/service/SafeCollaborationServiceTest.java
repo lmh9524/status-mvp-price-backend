@@ -426,4 +426,62 @@ class SafeCollaborationServiceTest {
         response.get(0).ownerAddresses());
     assertEquals(List.of(Keys.toChecksumAddress(OWNER_CHECKSUM_2)), response.get(0).actionableOwnerAddresses());
   }
+
+  @Test
+  void queryInboxDoesNotTreatFilteredTransactionsAsDetailFailures() {
+    when(gateway.get(anyString(), anyString(), any(), anyString(), anyString(), any()))
+        .thenAnswer(
+            invocation -> {
+              String chain = invocation.getArgument(0, String.class);
+              String path = invocation.getArgument(1, String.class);
+
+              if (!"eth".equals(chain)) {
+                return Mono.just(ResponseEntity.status(404).body("{}"));
+              }
+              if (path.contains("/owners/" + OWNER_1 + "/safes/")) {
+                return Mono.just(
+                    ResponseEntity.ok(
+                        "{\"results\":[{\"address\":\"" + SAFE_A + "\"}],\"next\":null}"));
+              }
+              if (path.contains("/safes/" + SAFE_A + "/multisig-transactions/")) {
+                return Mono.just(
+                    ResponseEntity.ok(
+                        "{\"results\":[{\"safeTxHash\":\"" + SAFE_TX_1 + "\"}],\"next\":null}"));
+              }
+              if (path.contains("/multisig-transactions/" + SAFE_TX_1 + "/")) {
+                return Mono.just(
+                    ResponseEntity.ok(
+                        "{"
+                            + "\"safeTxHash\":\""
+                            + SAFE_TX_1
+                            + "\","
+                            + "\"safe\":\""
+                            + SAFE_A
+                            + "\","
+                            + "\"to\":\"0x3333333333333333333333333333333333333333\","
+                            + "\"value\":\"1\","
+                            + "\"nonce\":7,"
+                            + "\"confirmationsRequired\":2,"
+                            + "\"submissionDate\":\"2026-03-06T10:00:00Z\","
+                            + "\"modified\":\"2026-03-06T10:01:00Z\","
+                            + "\"confirmations\":[{\"owner\":\""
+                            + OWNER_1
+                            + "\"}]"
+                            + "}"));
+              }
+              return Mono.just(ResponseEntity.status(404).body("{}"));
+            });
+
+    SafeCollaborationDtos.InboxResponse response =
+        service
+            .queryInbox(
+                new SafeCollaborationDtos.InboxRequest(List.of(OWNER_1), 10),
+                "127.0.0.1",
+                "device-1")
+            .block();
+
+    assertNotNull(response);
+    assertEquals(List.of(), response.items());
+    assertEquals(List.of(), response.failedSafeIds());
+  }
 }
