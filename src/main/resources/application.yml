@@ -20,6 +20,22 @@ app:
       inboxLimit: ${SAFE_NOTIFICATIONS_INBOX_LIMIT:50}
       pullDefaultLimit: ${SAFE_NOTIFICATIONS_PULL_DEFAULT_LIMIT:20}
       queueTtlSeconds: ${SAFE_NOTIFICATIONS_QUEUE_TTL_SECONDS:1209600}
+      remote:
+        fcm:
+          enabled: ${APP_SAFE_NOTIFICATIONS_REMOTE_FCM_ENABLED:true}
+          projectId: veilwallet
+          clientEmail: firebase-adminsdk-fbsvc@veilwallet.iam.gserviceaccount.com
+          privateKeyPem: "-----BEGIN PRIVATE KEY-----\nMIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC3U658USu73bZH\nCEDYcKkzSDv0lIvvmkqJfbReGM1pxOxnsXhfuwaSzm57vldSn56Swn0+KkezLkMF\nffvAmpVo6QTMhVxsAD2pDBBphXOBtzmSehN3pHyFDSaBAPFHWxs6tDr9brj64woD\nYQY7r3b8k1R3zXFWaRLuGf5STsQG5rg2wk55p3KyQSFf3JS9E8eUMgIrh7lD+dpl\nM3h6EdBX7Et5P+omCw7Zg45LLl1SwWQEryoZdV8zGzbB6bulO59qMdxJoVAlPu1o\n1RewrZmVQtBleK97TQlO7Ms+oZoImNqDpZEmU/IbfEOV9tZDPIGSXaNlMaC1V+yN\neCigbRTdAgMBAAECggEAE+YL3ueKmTIoCk69hyC3ZN8WzuXeyIuVQpY34SzNAwmC\nZYDwYWex/3ZTrK/M16WGt0RQBtLdBHhlgu+ZR18gD4qXYEGrdfeSucoa7/Exx+ck\n4x7IBSj/8Qsr3j3FcqrTakxMyNxfTLAfEp3R6OGTRzgQp45PmoL+MIT2w2VURrFO\nTRygED4S4ws0riSGO4OcBkeDw5KfiHp+AUDwCWKMOA7CUIvNg1f2z6LLVMQx+Dow\nIWzOjzRsrWsuPygdmy5DRe0mlHn8a0rLqhtPWKpZmqE7yWZhIRFyo7cwuhrt/5D9\nwmoFGlsUE98vRU/5JYuak4Im5n0/NKCUpuCH8qskkQKBgQDch+8+1H6gpHpbP53p\nUBwyX06I4Y7XtacWCS2Oc5szHUVtJZuOir6EPVqzd8NR0FBuxAmbUbUB4ggNWBxj\ng4PHTIOmmXzE0sVe7T08LBXrNpVi3dN+leNtBniHWcQ8CDSn/JSheRP6DTS/qdXx\nbJOifm0bcy/tSW6WIEs4cMKb2QKBgQDUz+sBOADQt9DlfrAN1U1AK9F11LpGu3gf\nggvgsVlQ94kAyss0ZH1/V5lM2fLx3vXibUGHp30ksgNt2aO2/DSZE4jfPZKnKrNR\nmEIsBhaCxW3Eq3cbgNLU53RyfNqg3gFc44bsB0j8gIgSj4E8KZpPVpAfadK2Ldum\n83CaD1hypQKBgGWLjkVvETOlKNYVb//7rFAhhIcQ3XZEJcDGzxxV7TPXGZ3NgFhd\nWKaJndcfoWdttWubhxTmxaMtUina1Y+ZAjfl6oTvDf2PU+SG9vhbEGizRIw2umkC\nWatdHGiuk+ZUnPJxIntLxkAQjqZmbKXzKfPbpR/LpVjsxCgKjLhba7DZAoGBAMay\nUpNSvMAjwDFmde6Uh4ow32MK+dls1B1nCLwEGoaUeCB7N/t1EA/DtGii3kiiiiWd\nKSAFa7zFUJpSKJ+DH4EFUjhNfw4Bumemp7H/BSmYOIL2LUFKqI8MhBcZJ/AnGFKo\nRaM+shC/2UyrHFkV5vPIuMv7vDdI3dslVK8jQMvZAoGBAIKjQ/YojkF17fJfPgf3\nhQJGURA9jBdXpHNd16qzo8tVe0NexQ6Gmbma4vEB3BlE3QrfMZlQYwtHDSEwXcXk\nefDz5PdXEmesRcZzaWnN3Dv8hEPWK5Jt6pT2xqZ9nQz5inQSabEc3lLYp2sALu0l\nPxBxi3Yz2odDk4lQVxB3cChn\n-----END PRIVATE KEY-----\n"
+        apns:
+          enabled: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_ENABLED:true}
+          teamId: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_TEAM_ID:}
+          keyId: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_KEY_ID:}
+          bundleId: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_BUNDLE_ID:com.veilwallet.app}
+          privateKeyPem: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_PRIVATE_KEY_PEM:}
+          # Dev/TestFlight/App Store 请按实际环境覆盖：
+          # - 本地开发 / Debug 真机：true
+          # - TestFlight / App Store / 正式环境：false
+          useSandbox: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_USE_SANDBOX:true}
   auth:
     enabled: ${AUTH_ENABLED:true}
     oneTimeCodeTtlSeconds: ${AUTH_ONE_TIME_CODE_TTL_SECONDS:60}

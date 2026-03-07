@@ -744,6 +744,14 @@ public class SafeNotificationService {
     return trimmed.isEmpty() ? "" : trimmed;
   }
 
+  private static String normalizePem(String value) {
+    String normalized = normalizeToken(value);
+    if (normalized.isEmpty()) {
+      return "";
+    }
+    return normalized.replace("\\n", "\n").replace("\r\n", "\n").replace('\r', '\n');
+  }
+
   private static String normalizeAddress(String value) {
     if (value == null) {
       return null;
@@ -767,6 +775,56 @@ public class SafeNotificationService {
 
   private static String safeId(int chainId, String safeAddress) {
     return chainId + ":" + safeAddress.toLowerCase(Locale.ROOT);
+  }
+
+  private static String shortAddress(String value, int head, int tail) {
+    String normalized = normalizeToken(value);
+    if (normalized.isEmpty()) {
+      return "--";
+    }
+    if (normalized.length() <= Math.max(0, head) + Math.max(0, tail) + 3) {
+      return normalized;
+    }
+    return normalized.substring(0, Math.max(0, head))
+        + "..."
+        + normalized.substring(normalized.length() - Math.max(0, tail));
+  }
+
+  private static String truncate(String value) {
+    String normalized = value == null ? "" : value.trim();
+    if (normalized.length() <= 300) {
+      return normalized;
+    }
+    return normalized.substring(0, 300) + "...";
+  }
+
+  private static RSAPrivateKey parseRsaPrivateKey(String pem) throws Exception {
+    byte[] encoded = decodePem(pem);
+    return (RSAPrivateKey) KeyFactory.getInstance("RSA").generatePrivate(new PKCS8EncodedKeySpec(encoded));
+  }
+
+  private static ECPrivateKey parseEcPrivateKey(String pem) throws Exception {
+    byte[] encoded = decodePem(pem);
+    return (ECPrivateKey) KeyFactory.getInstance("EC").generatePrivate(new PKCS8EncodedKeySpec(encoded));
+  }
+
+  private static byte[] decodePem(String pem) {
+    String normalized = normalizePem(pem);
+    String sanitized =
+        normalized
+            .replace("-----BEGIN PRIVATE KEY-----", "")
+            .replace("-----END PRIVATE KEY-----", "")
+            .replaceAll("\\s+", "");
+    if (sanitized.isBlank()) {
+      throw new IllegalArgumentException("Missing private key content");
+    }
+    return Base64.getDecoder().decode(sanitized);
+  }
+
+  private static String buildSafeDeepLink(NotificationRecord record) {
+    String base = "veilwallet://safe/" + record.chainId() + "/" + record.safeAddress();
+    String safeTxHash = normalizeToken(record.safeTxHash());
+    return safeTxHash.isEmpty() ? base : base + "/tx/" + safeTxHash;
   }
 
   private static String stateKey(int chainId, String safeTxHash) {
@@ -839,6 +897,8 @@ public class SafeNotificationService {
       return null;
     }
   }
+
+  private record PushContent(String title, String body, String deepLink) {}
 
   private record DeviceRecord(
       String deviceUuid, String deviceType, String cloudMessagingToken, String updatedAt) {}
