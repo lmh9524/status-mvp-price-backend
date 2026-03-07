@@ -16,6 +16,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.ResponseEntity;
 import org.springframework.util.MultiValueMap;
+import org.web3j.crypto.Keys;
 import reactor.core.publisher.Mono;
 
 class SafeCollaborationServiceTest {
@@ -27,6 +28,12 @@ class SafeCollaborationServiceTest {
       "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   private static final String SAFE_TX_2 =
       "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  private static final String OWNER_CHECKSUM = "0xE2eB8AF4c7E793f38A684404FF81a3ac69750bD4";
+  private static final String OWNER_CHECKSUM_LOWER = OWNER_CHECKSUM.toLowerCase();
+  private static final String OWNER_CHECKSUM_2 = "0xCad19E4fE39879197134456C0735C7E8c7a04c23";
+  private static final String OWNER_CHECKSUM_2_LOWER = OWNER_CHECKSUM_2.toLowerCase();
+  private static final String SAFE_CHECKSUM = "0x445C11cE36a13349Fb2A4D8Bfd4BD161b3B82BbA";
+  private static final String SAFE_CHECKSUM_LOWER = SAFE_CHECKSUM.toLowerCase();
 
   private SafeTxServiceGatewayService gateway;
   private SafeCollaborationService service;
@@ -79,6 +86,41 @@ class SafeCollaborationServiceTest {
     assertEquals(1, first.chainId());
     assertEquals(SAFE_A, first.safeAddress());
     assertEquals(List.of(OWNER_1, OWNER_2), first.ownerAddresses());
+  }
+
+  @Test
+  void queryDiscoveryConvertsLowercaseOwnerToChecksumForUpstream() {
+    when(gateway.get(anyString(), anyString(), any(), anyString(), anyString(), any()))
+        .thenAnswer(
+            invocation -> {
+              String chain = invocation.getArgument(0, String.class);
+              String path = invocation.getArgument(1, String.class);
+              if (!"bnb".equals(chain)) {
+                return Mono.just(ResponseEntity.status(404).body("{}"));
+              }
+              if (path.contains("/owners/" + OWNER_CHECKSUM + "/safes/")) {
+                return Mono.just(
+                    ResponseEntity.ok(
+                        "{\"results\":[{\"address\":\"" + SAFE_CHECKSUM + "\"}],\"next\":null}"));
+              }
+              if (path.contains("/owners/" + OWNER_CHECKSUM_LOWER + "/safes/")) {
+                return Mono.just(ResponseEntity.status(422).body("{\"error\":\"checksum required\"}"));
+              }
+              return Mono.just(ResponseEntity.status(404).body("{}"));
+            });
+
+    SafeCollaborationDtos.DiscoveryResponse response =
+        service
+            .queryDiscoveredSafes(
+                new SafeCollaborationDtos.DiscoveryRequest(List.of(OWNER_CHECKSUM_LOWER)),
+                "127.0.0.1",
+                "device-1")
+            .block();
+
+    assertNotNull(response);
+    assertEquals(List.of(OWNER_CHECKSUM), response.ownerAddresses());
+    assertEquals(1, response.items().size());
+    assertEquals(SAFE_CHECKSUM, response.items().get(0).safeAddress());
   }
 
   @Test
@@ -317,5 +359,71 @@ class SafeCollaborationServiceTest {
     assertIterableEquals(
         List.of(safeTxHashPage2, safeTxHashPage1),
         response.items().stream().map(SafeCollaborationDtos.InboxItem::safeTxHash).toList());
+  }
+
+  @Test
+  void queryInboxItemsForSafesConvertsLowercaseSafeAndOwnersToChecksumForUpstream() {
+    when(gateway.get(anyString(), anyString(), any(), anyString(), anyString(), any()))
+        .thenAnswer(
+            invocation -> {
+              String chain = invocation.getArgument(0, String.class);
+              String path = invocation.getArgument(1, String.class);
+              @SuppressWarnings("unchecked")
+              MultiValueMap<String, String> query = invocation.getArgument(2, MultiValueMap.class);
+
+              if (!"bnb".equals(chain)) {
+                return Mono.just(ResponseEntity.status(404).body("{}"));
+              }
+              if (path.contains("/safes/" + SAFE_CHECKSUM + "/multisig-transactions/")) {
+                assertEquals("false", query.getFirst("executed"));
+                return Mono.just(
+                    ResponseEntity.ok(
+                        "{\"results\":[{\"safeTxHash\":\"" + SAFE_TX_1 + "\"}],\"next\":null}"));
+              }
+              if (path.contains("/safes/" + SAFE_CHECKSUM_LOWER + "/multisig-transactions/")) {
+                return Mono.just(ResponseEntity.status(422).body("{\"error\":\"checksum required\"}"));
+              }
+              if (path.contains("/multisig-transactions/" + SAFE_TX_1 + "/")) {
+                return Mono.just(
+                    ResponseEntity.ok(
+                        "{"
+                            + "\"safeTxHash\":\""
+                            + SAFE_TX_1
+                            + "\","
+                            + "\"safe\":\""
+                            + SAFE_CHECKSUM
+                            + "\","
+                            + "\"to\":\"0x3333333333333333333333333333333333333333\","
+                            + "\"value\":\"1\","
+                            + "\"nonce\":7,"
+                            + "\"confirmationsRequired\":2,"
+                            + "\"submissionDate\":\"2026-03-06T10:00:00Z\","
+                            + "\"modified\":\"2026-03-06T10:01:00Z\","
+                            + "\"confirmations\":[{\"owner\":\""
+                            + OWNER_CHECKSUM
+                            + "\"}]"
+                            + "}"));
+              }
+              return Mono.just(ResponseEntity.status(404).body("{}"));
+            });
+
+    List<SafeCollaborationDtos.InboxItem> response =
+        service
+            .queryInboxItemsForSafes(
+                List.of(
+                    new SafeCollaborationDtos.DiscoveryItem(
+                        56, SAFE_CHECKSUM_LOWER, List.of(OWNER_CHECKSUM_LOWER, OWNER_CHECKSUM_2_LOWER))),
+                10,
+                "127.0.0.1",
+                "device-1")
+            .block();
+
+    assertNotNull(response);
+    assertEquals(1, response.size());
+    assertEquals(SAFE_CHECKSUM, response.get(0).safeAddress());
+    assertEquals(
+        List.of(OWNER_CHECKSUM, Keys.toChecksumAddress(OWNER_CHECKSUM_2)),
+        response.get(0).ownerAddresses());
+    assertEquals(List.of(Keys.toChecksumAddress(OWNER_CHECKSUM_2)), response.get(0).actionableOwnerAddresses());
   }
 }

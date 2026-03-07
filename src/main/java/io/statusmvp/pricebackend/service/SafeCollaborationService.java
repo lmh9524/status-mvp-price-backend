@@ -21,6 +21,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
 import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
+import org.web3j.crypto.Keys;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
@@ -102,8 +103,7 @@ public class SafeCollaborationService {
 
   public Mono<List<SafeCollaborationDtos.InboxItem>> queryInboxItemsForSafes(
       List<SafeCollaborationDtos.DiscoveryItem> items, int limit, String clientIp, String deviceId) {
-    List<SafeCollaborationDtos.DiscoveryItem> normalizedItems =
-        items == null ? List.of() : List.copyOf(items);
+    List<SafeCollaborationDtos.DiscoveryItem> normalizedItems = normalizeDiscoveryItems(items);
     if (normalizedItems.isEmpty()) {
       return Mono.just(List.of());
     }
@@ -528,7 +528,7 @@ public class SafeCollaborationService {
     for (JsonNode item : root.path("results")) {
       String safeAddress =
           item != null && item.isTextual() ? item.asText() : textOrNull(item == null ? null : item.get("address"));
-      String normalized = normalizeAddress(safeAddress);
+      String normalized = canonicalAddress(safeAddress);
       if (normalized != null) {
         safeAddresses.add(normalized);
       }
@@ -562,7 +562,7 @@ public class SafeCollaborationService {
     }
     return new TransactionDetail(
         safeTxHash == null ? "" : safeTxHash,
-        normalizeAddress(textOrNull(root.get("safe"))),
+        canonicalAddress(textOrNull(root.get("safe"))),
         textOrNull(root.get("to")),
         textOrNull(root.get("value")),
         intOrNull(root.get("nonce")),
@@ -632,7 +632,7 @@ public class SafeCollaborationService {
     }
     LinkedHashSet<String> normalized = new LinkedHashSet<>();
     for (String ownerAddress : ownerAddresses) {
-      String address = normalizeAddress(ownerAddress);
+      String address = canonicalAddress(ownerAddress);
       if (address != null) {
         normalized.add(address);
       }
@@ -640,7 +640,31 @@ public class SafeCollaborationService {
     return List.copyOf(normalized);
   }
 
-  private static String normalizeAddress(String value) {
+  private static List<SafeCollaborationDtos.DiscoveryItem> normalizeDiscoveryItems(
+      List<SafeCollaborationDtos.DiscoveryItem> items) {
+    if (items == null || items.isEmpty()) {
+      return List.of();
+    }
+
+    List<SafeCollaborationDtos.DiscoveryItem> normalized = new ArrayList<>();
+    for (SafeCollaborationDtos.DiscoveryItem item : items) {
+      if (item == null || item.chainId() <= 0) {
+        continue;
+      }
+
+      String safeAddress = canonicalAddress(item.safeAddress());
+      List<String> ownerAddresses = normalizeOwnerAddresses(item.ownerAddresses());
+      if (safeAddress == null || ownerAddresses.isEmpty()) {
+        continue;
+      }
+
+      normalized.add(
+          new SafeCollaborationDtos.DiscoveryItem(item.chainId(), safeAddress, ownerAddresses));
+    }
+    return List.copyOf(normalized);
+  }
+
+  private static String canonicalAddress(String value) {
     if (value == null) {
       return null;
     }
@@ -648,7 +672,16 @@ public class SafeCollaborationService {
     if (!EVM_ADDRESS_PATTERN.matcher(trimmed).matches()) {
       return null;
     }
-    return trimmed.toLowerCase(Locale.ROOT);
+    try {
+      return Keys.toChecksumAddress(trimmed);
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  private static String normalizeAddress(String value) {
+    String canonical = canonicalAddress(value);
+    return canonical == null ? null : canonical.toLowerCase(Locale.ROOT);
   }
 
   private static Optional<Integer> parseOffset(String nextUrl) {
