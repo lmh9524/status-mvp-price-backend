@@ -32,9 +32,9 @@ public class SafeCollaborationService {
   private static final SafeTxServiceGatewayService.CachePolicy OWNER_DISCOVERY_CACHE =
       new SafeTxServiceGatewayService.CachePolicy(60, 300, 30);
   private static final SafeTxServiceGatewayService.CachePolicy QUEUE_CACHE =
-      new SafeTxServiceGatewayService.CachePolicy(15, 60, 5);
+      new SafeTxServiceGatewayService.CachePolicy(45, 120, 5);
   private static final SafeTxServiceGatewayService.CachePolicy TX_DETAIL_CACHE =
-      new SafeTxServiceGatewayService.CachePolicy(15, 60, 5);
+      new SafeTxServiceGatewayService.CachePolicy(45, 120, 5);
 
   private static final int OWNER_PAGE_LIMIT = 100;
   private static final int OWNER_MAX_PAGES = 5;
@@ -43,10 +43,10 @@ public class SafeCollaborationService {
   private static final int SAFE_QUEUE_PAGE_LIMIT = 10;
   private static final int SAFE_QUEUE_MAX_PAGES = 5;
   private static final int SAFE_QUEUE_MAX_ITEMS = 20;
-  private static final int OWNER_CONCURRENCY = 4;
-  private static final int OWNER_CHAIN_CONCURRENCY = 3;
-  private static final int SAFE_CONCURRENCY = 6;
-  private static final int TX_DETAIL_CONCURRENCY = 6;
+  private static final int OWNER_CONCURRENCY = 2;
+  private static final int OWNER_CHAIN_CONCURRENCY = 1;
+  private static final int SAFE_CONCURRENCY = 2;
+  private static final int TX_DETAIL_CONCURRENCY = 2;
 
   private static final Pattern EVM_ADDRESS_PATTERN = Pattern.compile("^0x[0-9a-fA-F]{40}$");
 

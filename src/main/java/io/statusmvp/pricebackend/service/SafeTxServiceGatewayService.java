@@ -45,6 +45,7 @@ public class SafeTxServiceGatewayService {
   private final int windowSeconds;
   private final int ipLimit;
   private final int deviceLimit;
+  private final UpstreamTokenBucket upstreamRateLimiter;
 
   private final ConcurrentHashMap<String, Mono<ResponseEntity<String>>> inflight = new ConcurrentHashMap<>();
 
@@ -55,7 +56,9 @@ public class SafeTxServiceGatewayService {
       ObjectMapper objectMapper,
       @Value("${SAFE_TX_GW_RL_WINDOW_SECONDS:60}") int windowSeconds,
       @Value("${SAFE_TX_GW_RL_IP_LIMIT:600}") int ipLimit,
-      @Value("${SAFE_TX_GW_RL_DEVICE_LIMIT:300}") int deviceLimit) {
+      @Value("${SAFE_TX_GW_RL_DEVICE_LIMIT:300}") int deviceLimit,
+      @Value("${SAFE_TX_UPSTREAM_RPS:4}") double upstreamRps,
+      @Value("${SAFE_TX_UPSTREAM_BURST:4}") int upstreamBurst) {
     this.safeTxService = safeTxService;
     this.cache = cache;
     this.redis = redis;
@@ -63,6 +66,7 @@ public class SafeTxServiceGatewayService {
     this.windowSeconds = Math.max(1, windowSeconds);
     this.ipLimit = Math.max(1, ipLimit);
     this.deviceLimit = Math.max(1, deviceLimit);
+    this.upstreamRateLimiter = new UpstreamTokenBucket(upstreamRps, upstreamBurst);
   }
 
   public Mono<ResponseEntity<String>> get(
@@ -106,7 +110,7 @@ public class SafeTxServiceGatewayService {
               if (!rl.allowed()) {
                 return Mono.just(rateLimitedResponse(rl.retryAfterSeconds()));
               }
-              return safeTxService.post(chain, path, query, body);
+              return awaitUpstreamPermit().then(safeTxService.post(chain, path, query, body));
             });
   }
 
@@ -120,8 +124,8 @@ public class SafeTxServiceGatewayService {
     return inflight.computeIfAbsent(
         freshKey,
         k ->
-            safeTxService
-                .get(chain, path, query)
+            awaitUpstreamPermit()
+                .then(safeTxService.get(chain, path, query))
                 .flatMap(
                     resp -> {
                       int status = resp.getStatusCode().value();
@@ -155,6 +159,14 @@ public class SafeTxServiceGatewayService {
                                 }))
                 .doFinally(sig -> inflight.remove(k))
                 .cache());
+  }
+
+  private Mono<Void> awaitUpstreamPermit() {
+    long delayMs = upstreamRateLimiter.reserveDelayMillis();
+    if (delayMs <= 0) {
+      return Mono.empty();
+    }
+    return Mono.delay(Duration.ofMillis(delayMs)).then();
   }
 
   private Mono<Optional<CachedResponse>> readCache(String key) {
@@ -289,6 +301,38 @@ public class SafeTxServiceGatewayService {
       return sb.toString();
     } catch (Exception e) {
       return Integer.toHexString((input == null ? "" : input).hashCode());
+    }
+  }
+
+  static final class UpstreamTokenBucket {
+    private final double refillPerSecond;
+    private final int burstCapacity;
+    private double storedTokens;
+    private long lastRefillNanos;
+
+    UpstreamTokenBucket(double refillPerSecond, int burstCapacity) {
+      this.refillPerSecond = Math.max(0.1d, refillPerSecond);
+      this.burstCapacity = Math.max(1, burstCapacity);
+      this.storedTokens = this.burstCapacity;
+      this.lastRefillNanos = System.nanoTime();
+    }
+
+    synchronized long reserveDelayMillis() {
+      long now = System.nanoTime();
+      long elapsedNanos = Math.max(0L, now - lastRefillNanos);
+      if (elapsedNanos > 0) {
+        double replenished = (elapsedNanos / 1_000_000_000d) * refillPerSecond;
+        storedTokens = Math.min(burstCapacity, storedTokens + replenished);
+        lastRefillNanos = now;
+      }
+
+      storedTokens -= 1d;
+      if (storedTokens >= 0d) {
+        return 0L;
+      }
+
+      double deficit = -storedTokens;
+      return (long) Math.ceil((deficit / refillPerSecond) * 1000d);
     }
   }
 }

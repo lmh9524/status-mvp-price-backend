@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import io.statusmvp.pricebackend.client.SafeTxServiceClient;
 import jakarta.validation.constraints.NotBlank;
 import java.util.Set;
+import java.util.function.Supplier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.annotation.Validated;
@@ -25,10 +27,17 @@ import reactor.core.publisher.Mono;
 @Validated
 public class SafeTxServiceProxyController {
   private static final Set<String> ALLOWED_CHAINS = Set.of("eth", "base", "oeth", "arb1", "bnb");
-  private final SafeTxServiceClient safeTxService;
+  private static final String DISABLED_BODY =
+      "{\"error\":\"Safe tx-service proxy disabled; use /api/v1/safe/tx-service-gateway\"}";
 
-  public SafeTxServiceProxyController(SafeTxServiceClient safeTxService) {
+  private final SafeTxServiceClient safeTxService;
+  private final boolean proxyEnabled;
+
+  public SafeTxServiceProxyController(
+      SafeTxServiceClient safeTxService,
+      @Value("${SAFE_TX_PROXY_ENABLED:false}") boolean proxyEnabled) {
     this.safeTxService = safeTxService;
+    this.proxyEnabled = proxyEnabled;
   }
 
   private static String normalizeChain(String chain) {
@@ -39,12 +48,25 @@ public class SafeTxServiceProxyController {
     return c;
   }
 
+  private Mono<ResponseEntity<String>> whenEnabled(Supplier<Mono<ResponseEntity<String>>> action) {
+    if (!proxyEnabled) {
+      return Mono.just(
+          ResponseEntity.status(HttpStatus.GONE)
+              .contentType(MediaType.APPLICATION_JSON)
+              .body(DISABLED_BODY));
+    }
+    return action.get();
+  }
+
   @GetMapping("/{chain}/safes/{address}")
   public Mono<ResponseEntity<String>> getSafeInfo(
       @PathVariable("chain") String chain,
       @PathVariable("address") @NotBlank String address) {
-    String c = normalizeChain(chain);
-    return safeTxService.get(c, "/api/v1/safes/" + address + "/", null);
+    return whenEnabled(
+        () -> {
+          String c = normalizeChain(chain);
+          return safeTxService.get(c, "/api/v1/safes/" + address + "/", null);
+        });
   }
 
   @GetMapping("/{chain}/safes/{address}/multisig-transactions")
@@ -55,21 +77,27 @@ public class SafeTxServiceProxyController {
       @RequestParam(value = "ordering", required = false) String ordering,
       @RequestParam(value = "limit", required = false) Integer limit,
       @RequestParam(value = "offset", required = false) Integer offset) {
-    String c = normalizeChain(chain);
-    MultiValueMap<String, String> q = new LinkedMultiValueMap<>();
-    if (executed != null) q.add("executed", executed.toString());
-    if (ordering != null && !ordering.isBlank()) q.add("ordering", ordering);
-    if (limit != null) q.add("limit", String.valueOf(limit));
-    if (offset != null) q.add("offset", String.valueOf(offset));
-    return safeTxService.get(c, "/api/v2/safes/" + address + "/multisig-transactions/", q);
+    return whenEnabled(
+        () -> {
+          String c = normalizeChain(chain);
+          MultiValueMap<String, String> q = new LinkedMultiValueMap<>();
+          if (executed != null) q.add("executed", executed.toString());
+          if (ordering != null && !ordering.isBlank()) q.add("ordering", ordering);
+          if (limit != null) q.add("limit", String.valueOf(limit));
+          if (offset != null) q.add("offset", String.valueOf(offset));
+          return safeTxService.get(c, "/api/v2/safes/" + address + "/multisig-transactions/", q);
+        });
   }
 
   @GetMapping("/{chain}/multisig-transactions/{safeTxHash}")
   public Mono<ResponseEntity<String>> getMultisigTransaction(
       @PathVariable("chain") String chain,
       @PathVariable("safeTxHash") @NotBlank String safeTxHash) {
-    String c = normalizeChain(chain);
-    return safeTxService.get(c, "/api/v2/multisig-transactions/" + safeTxHash + "/", null);
+    return whenEnabled(
+        () -> {
+          String c = normalizeChain(chain);
+          return safeTxService.get(c, "/api/v2/multisig-transactions/" + safeTxHash + "/", null);
+        });
   }
 
   @GetMapping("/{chain}/multisig-transactions/{safeTxHash}/confirmations")
@@ -78,11 +106,14 @@ public class SafeTxServiceProxyController {
       @PathVariable("safeTxHash") @NotBlank String safeTxHash,
       @RequestParam(value = "limit", required = false) Integer limit,
       @RequestParam(value = "offset", required = false) Integer offset) {
-    String c = normalizeChain(chain);
-    MultiValueMap<String, String> q = new LinkedMultiValueMap<>();
-    if (limit != null) q.add("limit", String.valueOf(limit));
-    if (offset != null) q.add("offset", String.valueOf(offset));
-    return safeTxService.get(c, "/api/v1/multisig-transactions/" + safeTxHash + "/confirmations/", q);
+    return whenEnabled(
+        () -> {
+          String c = normalizeChain(chain);
+          MultiValueMap<String, String> q = new LinkedMultiValueMap<>();
+          if (limit != null) q.add("limit", String.valueOf(limit));
+          if (offset != null) q.add("offset", String.valueOf(offset));
+          return safeTxService.get(c, "/api/v1/multisig-transactions/" + safeTxHash + "/confirmations/", q);
+        });
   }
 
   @PostMapping("/{chain}/safes/{address}/multisig-transactions")
@@ -90,8 +121,11 @@ public class SafeTxServiceProxyController {
       @PathVariable("chain") String chain,
       @PathVariable("address") @NotBlank String address,
       @RequestBody(required = false) JsonNode body) {
-    String c = normalizeChain(chain);
-    return safeTxService.post(c, "/api/v2/safes/" + address + "/multisig-transactions/", null, body);
+    return whenEnabled(
+        () -> {
+          String c = normalizeChain(chain);
+          return safeTxService.post(c, "/api/v2/safes/" + address + "/multisig-transactions/", null, body);
+        });
   }
 
   @PostMapping("/{chain}/multisig-transactions/{safeTxHash}/confirmations")
@@ -99,9 +133,12 @@ public class SafeTxServiceProxyController {
       @PathVariable("chain") String chain,
       @PathVariable("safeTxHash") @NotBlank String safeTxHash,
       @RequestBody(required = false) JsonNode body) {
-    String c = normalizeChain(chain);
-    return safeTxService.post(
-        c, "/api/v1/multisig-transactions/" + safeTxHash + "/confirmations/", null, body);
+    return whenEnabled(
+        () -> {
+          String c = normalizeChain(chain);
+          return safeTxService.post(
+              c, "/api/v1/multisig-transactions/" + safeTxHash + "/confirmations/", null, body);
+        });
   }
 }
 
