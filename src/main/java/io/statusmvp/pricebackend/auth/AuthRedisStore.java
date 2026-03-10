@@ -40,9 +40,12 @@ public class AuthRedisStore {
   public Optional<OAuthStateRecord> consumeOAuthState(String state) {
     if (state == null || state.isBlank()) return Optional.empty();
     String key = PREFIX_OAUTH_STATE + state;
-    Optional<OAuthStateRecord> out = getJson(key, OAuthStateRecord.class);
-    redis.delete(key);
-    return out;
+    return getAndDeleteJson(key, OAuthStateRecord.class);
+  }
+
+  public Optional<OAuthStateRecord> peekOAuthState(String state) {
+    if (state == null || state.isBlank()) return Optional.empty();
+    return getJson(PREFIX_OAUTH_STATE + state, OAuthStateRecord.class);
   }
 
   public void putOAuthStateDevice(String state, String deviceId, long ttlSeconds) {
@@ -59,8 +62,7 @@ public class AuthRedisStore {
   public Optional<String> consumeOAuthStateDevice(String state) {
     if (state == null || state.isBlank()) return Optional.empty();
     String key = PREFIX_OAUTH_STATE_DEVICE + state;
-    String out = redis.opsForValue().get(key);
-    redis.delete(key);
+    String out = redis.opsForValue().getAndDelete(key);
     if (out == null || out.isBlank()) return Optional.empty();
     return Optional.of(out.trim());
   }
@@ -134,9 +136,7 @@ public class AuthRedisStore {
   public Optional<SiweNonceRecord> consumeSiweNonce(String nonce) {
     if (nonce == null || nonce.isBlank()) return Optional.empty();
     String key = PREFIX_SIWE_NONCE + nonce;
-    Optional<SiweNonceRecord> out = getJson(key, SiweNonceRecord.class);
-    redis.delete(key);
-    return out;
+    return getAndDeleteJson(key, SiweNonceRecord.class);
   }
 
   public Optional<RefreshTokenRecord> getRefreshTokenByHash(String tokenHash) {
@@ -157,6 +157,16 @@ public class AuthRedisStore {
   private <T> Optional<T> getJson(String key, Class<T> type) {
     try {
       String raw = redis.opsForValue().get(key);
+      if (raw == null || raw.isBlank()) return Optional.empty();
+      return Optional.of(objectMapper.readValue(raw, type));
+    } catch (Exception e) {
+      return Optional.empty();
+    }
+  }
+
+  private <T> Optional<T> getAndDeleteJson(String key, Class<T> type) {
+    try {
+      String raw = redis.opsForValue().getAndDelete(key);
       if (raw == null || raw.isBlank()) return Optional.empty();
       return Optional.of(objectMapper.readValue(raw, type));
     } catch (Exception e) {

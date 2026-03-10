@@ -27,6 +27,8 @@ Optional:
 - `GET /.well-known/jwks.json`
 - `GET /api/v1/auth/x/start`
 - `GET /api/v1/auth/x/callback`
+- `GET /api/v1/auth/tg/start`
+- `GET /api/v1/auth/tg/callback`
 - `POST /api/v1/auth/tg/login`
 - `POST /api/v1/auth/exchange`
 - `POST /api/v1/auth/refresh`
@@ -135,5 +137,4 @@ Environment variables (see `env.example`):
 - `BRIDGE_ACROSS_ALLOWED_CHAIN_IDS` (comma-separated EIP-155 chainIds)
 - `BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS` (comma-separated symbols as returned by Across APIs)
 - `BRIDGE_ACROSS_CHAINS_CACHE_TTL_SECONDS`, `BRIDGE_ACROSS_ROUTES_CACHE_TTL_SECONDS`
-
 

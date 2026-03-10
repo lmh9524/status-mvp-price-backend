@@ -23,6 +23,7 @@ public class AuthProperties {
   private boolean bindEnabled = true;
   private boolean metricsEnabled = true;
   private String appRedirectAllowlist = "";
+  private String publicBaseUrl = "";
 
   private Web3Auth web3auth = new Web3Auth();
   private AppJwt appJwt = new AppJwt();
@@ -140,6 +141,14 @@ public class AuthProperties {
 
   public void setAppRedirectAllowlist(String appRedirectAllowlist) {
     this.appRedirectAllowlist = appRedirectAllowlist;
+  }
+
+  public String getPublicBaseUrl() {
+    return publicBaseUrl;
+  }
+
+  public void setPublicBaseUrl(String publicBaseUrl) {
+    this.publicBaseUrl = publicBaseUrl;
   }
 
   public Web3Auth getWeb3auth() {
@@ -367,12 +376,95 @@ public class AuthProperties {
     public List<String> scopeList() {
       return AuthProperties.splitCsv(scopes.replace(" ", ","));
     }
+
   }
 
   public static class Tg {
+    private String clientId = "";
+    private String clientSecret = "";
+    private String redirectUri = "";
+    private String stateSecret = "";
+    private String scopes = "openid";
+    private String issuer = "https://oauth.telegram.org";
+    private String authorizeEndpoint = "https://oauth.telegram.org/auth";
+    private String tokenEndpoint = "https://oauth.telegram.org/token";
+    private String jwksUri = "https://oauth.telegram.org/.well-known/jwks.json";
     private String botToken = "";
     private String botUsername = "";
     private long authMaxAgeSeconds = 600;
+    private boolean legacyWidgetEnabled = false;
+
+    public String getClientId() {
+      return clientId;
+    }
+
+    public void setClientId(String clientId) {
+      this.clientId = clientId;
+    }
+
+    public String getClientSecret() {
+      return clientSecret;
+    }
+
+    public void setClientSecret(String clientSecret) {
+      this.clientSecret = clientSecret;
+    }
+
+    public String getRedirectUri() {
+      return redirectUri;
+    }
+
+    public void setRedirectUri(String redirectUri) {
+      this.redirectUri = redirectUri;
+    }
+
+    public String getStateSecret() {
+      return stateSecret;
+    }
+
+    public void setStateSecret(String stateSecret) {
+      this.stateSecret = stateSecret;
+    }
+
+    public String getScopes() {
+      return scopes;
+    }
+
+    public void setScopes(String scopes) {
+      this.scopes = scopes;
+    }
+
+    public String getIssuer() {
+      return issuer;
+    }
+
+    public void setIssuer(String issuer) {
+      this.issuer = issuer;
+    }
+
+    public String getAuthorizeEndpoint() {
+      return authorizeEndpoint;
+    }
+
+    public void setAuthorizeEndpoint(String authorizeEndpoint) {
+      this.authorizeEndpoint = authorizeEndpoint;
+    }
+
+    public String getTokenEndpoint() {
+      return tokenEndpoint;
+    }
+
+    public void setTokenEndpoint(String tokenEndpoint) {
+      this.tokenEndpoint = tokenEndpoint;
+    }
+
+    public String getJwksUri() {
+      return jwksUri;
+    }
+
+    public void setJwksUri(String jwksUri) {
+      this.jwksUri = jwksUri;
+    }
 
     public String getBotToken() {
       return botToken;
@@ -397,11 +489,42 @@ public class AuthProperties {
     public void setAuthMaxAgeSeconds(long authMaxAgeSeconds) {
       this.authMaxAgeSeconds = authMaxAgeSeconds;
     }
+
+    public boolean isLegacyWidgetEnabled() {
+      return legacyWidgetEnabled;
+    }
+
+    public void setLegacyWidgetEnabled(boolean legacyWidgetEnabled) {
+      this.legacyWidgetEnabled = legacyWidgetEnabled;
+    }
+
+    public List<String> scopeList() {
+      return AuthProperties.splitCsv(scopes.replace(" ", ","));
+    }
+
+    public String resolvedClientId() {
+      if (clientId != null && !clientId.isBlank()) {
+        return clientId.trim();
+      }
+      if (botToken == null || botToken.isBlank()) {
+        return "";
+      }
+      int colon = botToken.indexOf(':');
+      if (colon <= 0) {
+        return "";
+      }
+      String prefix = botToken.substring(0, colon).trim();
+      if (!prefix.matches("^\\d+$")) {
+        return "";
+      }
+      return prefix;
+    }
   }
 
   public static class Risk {
     private String blacklistIps = "";
     private String blacklistProviderSubs = "";
+    private String trustedProxyIps = "127.0.0.1,::1";
     private int loginIpLimit = 20;
     private int loginDeviceLimit = 30;
     private int bindAccountLimit = 20;
@@ -421,6 +544,14 @@ public class AuthProperties {
 
     public void setBlacklistProviderSubs(String blacklistProviderSubs) {
       this.blacklistProviderSubs = blacklistProviderSubs;
+    }
+
+    public String getTrustedProxyIps() {
+      return trustedProxyIps;
+    }
+
+    public void setTrustedProxyIps(String trustedProxyIps) {
+      this.trustedProxyIps = trustedProxyIps;
     }
 
     public int getLoginIpLimit() {
@@ -461,6 +592,10 @@ public class AuthProperties {
 
     public List<String> blacklistProviderSubList() {
       return AuthProperties.splitCsv(blacklistProviderSubs);
+    }
+
+    public List<String> trustedProxyIpList() {
+      return AuthProperties.splitCsv(trustedProxyIps);
     }
   }
 }

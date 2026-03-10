@@ -74,5 +74,68 @@ public final class AuthUtils {
     if (ip == null) return "";
     return ip.trim().toLowerCase(Locale.ROOT);
   }
-}
 
+  public static String firstForwardedValue(String value) {
+    if (value == null) return "";
+    String trimmed = value.trim();
+    if (trimmed.isEmpty()) return "";
+    int idx = trimmed.indexOf(',');
+    if (idx >= 0) {
+      trimmed = trimmed.substring(0, idx).trim();
+    }
+    return trimmed;
+  }
+
+  public static String normalizeForwardedHost(String value) {
+    if (value == null) return "";
+    String host = firstForwardedValue(value);
+    return host == null ? "" : host.trim();
+  }
+
+  public static String normalizeScheme(String value) {
+    if (value == null) return "";
+    return value.trim().toLowerCase(Locale.ROOT);
+  }
+
+  public static boolean isTrustedProxy(String remoteIp, List<String> trustedProxyIps) {
+    String normalizedRemoteIp = normalizeIp(remoteIp);
+    if (normalizedRemoteIp.isEmpty()) return false;
+    for (String trusted : trustedProxyIps == null ? List.<String>of() : trustedProxyIps) {
+      if (normalizedRemoteIp.equals(normalizeIp(trusted))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  public static String normalizeBaseUrl(String value) {
+    if (value == null) return "";
+    String trimmed = value.trim();
+    if (trimmed.isEmpty()) return "";
+    try {
+      URI parsed = URI.create(trimmed);
+      String scheme = normalizeScheme(parsed.getScheme());
+      String host = parsed.getHost();
+      if (scheme.isEmpty() || host == null || host.isBlank()) {
+        return "";
+      }
+      StringBuilder out = new StringBuilder();
+      out.append(scheme).append("://").append(host.trim());
+      if (parsed.getPort() > 0) {
+        out.append(':').append(parsed.getPort());
+      }
+      return out.toString();
+    } catch (Exception e) {
+      return "";
+    }
+  }
+
+  public static String buildBaseUrl(String scheme, String host) {
+    String normalizedScheme = normalizeScheme(scheme);
+    String normalizedHost = normalizeForwardedHost(host);
+    if (normalizedScheme.isEmpty() || normalizedHost.isEmpty()) {
+      return "";
+    }
+    return normalizedScheme + "://" + normalizedHost;
+  }
+}

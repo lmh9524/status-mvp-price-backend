@@ -25,4 +25,3 @@ public enum AuthErrorCode {
   SIWE_NONCE_EXPIRED,
   SIWE_SIGNATURE_INVALID
 }
-

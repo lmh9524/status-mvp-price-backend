@@ -25,9 +25,11 @@ import reactor.core.scheduler.Schedulers;
 @Validated
 public class AuthController {
   private final AuthService authService;
+  private final AuthProperties authProperties;
 
-  public AuthController(AuthService authService) {
+  public AuthController(AuthService authService, AuthProperties authProperties) {
     this.authService = authService;
+    this.authProperties = authProperties;
   }
 
   @GetMapping(path = "/.well-known/jwks.json", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -41,6 +43,35 @@ public class AuthController {
       @RequestParam(value = "appRedirectUri", required = false) String appRedirectUri,
       @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
     return Mono.fromCallable(() -> authService.startXLogin(appRedirectUri, deviceId))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @GetMapping(path = "/api/v1/auth/tg/start", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.OAuthStartResponse> startTelegram(
+      @RequestParam(value = "appRedirectUri", required = false) String appRedirectUri,
+      ServerWebExchange exchange,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+    return Mono.fromCallable(
+            () -> authService.startTelegramLogin(appRedirectUri, deviceId, resolveExternalBaseUrl(exchange)))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @GetMapping(path = "/api/v1/auth/tg/login", produces = MediaType.TEXT_HTML_VALUE)
+  public Mono<ResponseEntity<String>> telegramLoginPage(
+      @RequestParam(value = "state") String state,
+      @RequestParam(value = "nonce") String nonce) {
+    return Mono.fromCallable(
+            () -> {
+              String clientId = authService.telegramLoginClientId();
+              if (!StringUtils.hasText(state) || !StringUtils.hasText(nonce)) {
+                throw new AuthException(AuthErrorCode.BAD_REQUEST, "telegram login state missing", 400);
+              }
+              String html = telegramLoginHtml(clientId.trim(), state.trim(), nonce.trim());
+              return ResponseEntity.ok()
+                  .contentType(MediaType.TEXT_HTML)
+                  .header(HttpHeaders.CACHE_CONTROL, "no-store")
+                  .body(html);
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -152,6 +183,39 @@ public class AuthController {
         .subscribeOn(Schedulers.boundedElastic());
   }
 
+  @GetMapping(path = "/api/v1/auth/tg/callback", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<ResponseEntity<?>> telegramCallback(
+      @RequestParam(value = "code", required = false) String code,
+      @RequestParam(value = "state", required = false) String state,
+      @RequestParam(value = "error", required = false) String error,
+      @RequestParam(value = "error_description", required = false) String errorDescription,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+              String ip = resolveClientIp(exchange);
+              try {
+                AuthService.XCallbackResult result =
+                    authService.handleTelegramCallback(code, state, error, errorDescription, ip, deviceId);
+                if (result.appRedirectUri() != null && !result.appRedirectUri().isBlank()) {
+                  String location =
+                      authService.callbackRedirectUrl(
+                          result.appRedirectUri(), result.payload(), result.state());
+                  return ResponseEntity.status(HttpStatus.FOUND).header(HttpHeaders.LOCATION, location).build();
+                }
+                return ResponseEntity.ok(result.payload());
+              } catch (AuthException e) {
+                String appRedirectUri = authService.tryResolveTelegramAppRedirectUri(state);
+                if (appRedirectUri != null && !appRedirectUri.isBlank()) {
+                  String location = authService.callbackErrorRedirectUrl(appRedirectUri, e, state);
+                  return ResponseEntity.status(HttpStatus.FOUND).header(HttpHeaders.LOCATION, location).build();
+                }
+                throw e;
+              }
+            })
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
   @PostMapping(path = "/api/v1/auth/x/resume", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.AuthCodeResponse> xResume(
       @Valid @RequestBody AuthDtos.XResumeRequest request,
@@ -171,16 +235,47 @@ public class AuthController {
         .subscribeOn(Schedulers.boundedElastic());
   }
 
+  @PostMapping(path = "/api/v1/auth/tg/login/complete", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.RedirectResponse> telegramLoginComplete(
+      @Valid @RequestBody AuthDtos.TelegramOidcCompleteRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+              String ip = resolveClientIp(exchange);
+              String appRedirectUri = authService.tryResolveTelegramAppRedirectUri(request.state());
+              try {
+                AuthService.XCallbackResult result =
+                    authService.completeTelegramLogin(request.state(), request.idToken(), ip, deviceId);
+                String location =
+                    authService.callbackRedirectUrl(
+                        result.appRedirectUri(), result.payload(), result.state());
+                return new AuthDtos.RedirectResponse(location);
+              } catch (AuthException e) {
+                if (StringUtils.hasText(appRedirectUri)) {
+                  String location =
+                      authService.callbackErrorRedirectUrl(appRedirectUri, e, request.state());
+                  return new AuthDtos.RedirectResponse(location);
+                }
+                throw e;
+              }
+            })
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
   @PostMapping(path = "/api/v1/auth/exchange", produces = MediaType.APPLICATION_JSON_VALUE)
-  public Mono<AuthDtos.ExchangeResponse> exchange(@Valid @RequestBody AuthDtos.ExchangeRequest request) {
-    return Mono.fromCallable(() -> authService.exchange(request))
+  public Mono<AuthDtos.ExchangeResponse> exchange(
+      @Valid @RequestBody AuthDtos.ExchangeRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+    return Mono.fromCallable(() -> authService.exchange(request, deviceId))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
   @PostMapping(path = "/api/v1/auth/web3auth/jwt", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.Web3authJwtResponse> web3authJwt(
-      @Valid @RequestBody AuthDtos.ExchangeRequest request) {
-    return Mono.fromCallable(() -> authService.web3authJwt(request))
+      @Valid @RequestBody AuthDtos.ExchangeRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+    return Mono.fromCallable(() -> authService.web3authJwt(request, deviceId))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -223,8 +318,9 @@ public class AuthController {
   @PostMapping(path = "/api/v1/auth/providers/bind", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.MeResponse> bind(
       @RequestHeader("Authorization") String authorizationHeader,
-      @Valid @RequestBody AuthDtos.BindRequest request) {
-    return Mono.fromCallable(() -> authService.bindProvider(authorizationHeader, request))
+      @Valid @RequestBody AuthDtos.BindRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+    return Mono.fromCallable(() -> authService.bindProvider(authorizationHeader, request, deviceId))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -251,42 +347,70 @@ public class AuthController {
         .subscribeOn(Schedulers.boundedElastic());
   }
 
-  private static String resolveClientIp(ServerWebExchange exchange) {
-    String forwarded = exchange.getRequest().getHeaders().getFirst("X-Forwarded-For");
-    if (forwarded != null && !forwarded.isBlank()) {
-      int idx = forwarded.indexOf(',');
-      return idx > 0 ? forwarded.substring(0, idx).trim() : forwarded.trim();
+  private String resolveClientIp(ServerWebExchange exchange) {
+    String remoteIp = resolveRemoteIp(exchange);
+    if (!trustsForwardedHeaders(remoteIp)) {
+      return remoteIp;
     }
-    String realIp = exchange.getRequest().getHeaders().getFirst("X-Real-IP");
-    if (realIp != null && !realIp.isBlank()) return realIp.trim();
-    if (exchange.getRequest().getRemoteAddress() == null) return "";
-    if (exchange.getRequest().getRemoteAddress().getAddress() == null) return "";
-    return exchange.getRequest().getRemoteAddress().getAddress().getHostAddress();
+
+    String forwarded =
+        AuthUtils.firstForwardedValue(exchange.getRequest().getHeaders().getFirst("X-Forwarded-For"));
+    if (StringUtils.hasText(forwarded)) {
+      return forwarded;
+    }
+    String realIp = AuthUtils.firstForwardedValue(exchange.getRequest().getHeaders().getFirst("X-Real-IP"));
+    if (StringUtils.hasText(realIp)) {
+      return realIp;
+    }
+    return remoteIp;
   }
 
-  private static String resolveExternalBaseUrl(ServerWebExchange exchange) {
-    String forwardedProto = exchange.getRequest().getHeaders().getFirst("X-Forwarded-Proto");
-    String forwardedHost = exchange.getRequest().getHeaders().getFirst("X-Forwarded-Host");
-    String host = forwardedHost;
-    if (host != null) {
-      int idx = host.indexOf(',');
-      if (idx > 0) host = host.substring(0, idx).trim();
-    }
-    if (!StringUtils.hasText(host)) {
-      host = exchange.getRequest().getHeaders().getFirst("Host");
+  private String resolveExternalBaseUrl(ServerWebExchange exchange) {
+    String configured = AuthUtils.normalizeBaseUrl(authProperties.getPublicBaseUrl());
+    if (StringUtils.hasText(configured)) {
+      return configured;
     }
 
-    String scheme = StringUtils.hasText(forwardedProto) ? forwardedProto.trim() : exchange.getRequest().getURI().getScheme();
-    if (!StringUtils.hasText(scheme)) scheme = "https";
-    if ("http".equalsIgnoreCase(scheme) && StringUtils.hasText(host) && !isLocalHost(host)) {
-      // In production, TLS is typically terminated at the proxy; the app still needs an https callback URL.
-      scheme = "https";
+    String remoteIp = resolveRemoteIp(exchange);
+    boolean trustForwarded = trustsForwardedHeaders(remoteIp);
+
+    String scheme =
+        trustForwarded
+            ? AuthUtils.normalizeScheme(exchange.getRequest().getHeaders().getFirst("X-Forwarded-Proto"))
+            : "";
+    String host =
+        trustForwarded
+            ? AuthUtils.normalizeForwardedHost(exchange.getRequest().getHeaders().getFirst("X-Forwarded-Host"))
+            : "";
+    if (!StringUtils.hasText(host) && trustForwarded) {
+      host = AuthUtils.normalizeForwardedHost(exchange.getRequest().getHeaders().getFirst("Host"));
+    }
+    if (!StringUtils.hasText(scheme)) {
+      scheme = AuthUtils.normalizeScheme(exchange.getRequest().getURI().getScheme());
     }
     if (!StringUtils.hasText(host)) {
-      // Best-effort fallback; should not happen in real deployments.
-      return scheme + "://localhost";
+      host = AuthUtils.normalizeForwardedHost(exchange.getRequest().getURI().getAuthority());
     }
-    return scheme + "://" + host.trim();
+    if (!StringUtils.hasText(host)) {
+      host = "localhost";
+    }
+    if (!StringUtils.hasText(scheme)) {
+      scheme = "https";
+    }
+    if ("http".equalsIgnoreCase(scheme) && !isLocalHost(host)) {
+      scheme = "https";
+    }
+    return AuthUtils.buildBaseUrl(scheme, host);
+  }
+
+  private String resolveRemoteIp(ServerWebExchange exchange) {
+    if (exchange.getRequest().getRemoteAddress() == null) return "";
+    if (exchange.getRequest().getRemoteAddress().getAddress() == null) return "";
+    return AuthUtils.normalizeIp(exchange.getRequest().getRemoteAddress().getAddress().getHostAddress());
+  }
+
+  private boolean trustsForwardedHeaders(String remoteIp) {
+    return AuthUtils.isTrustedProxy(remoteIp, authProperties.getRisk().trustedProxyIpList());
   }
 
   private static boolean isLocalHost(String host) {
@@ -328,7 +452,6 @@ public class AuthController {
                   data-telegram-login="%s"
                   data-size="large"
                   data-userpic="false"
-                  data-request-access="write"
                   data-auth-url="%s"></script>
                 <div class="hint">If you don't see the button, try opening in an external browser.</div>
               </div>
@@ -337,6 +460,136 @@ public class AuthController {
         </html>
         """
         .formatted(bot, cb);
+  }
+
+  private static String telegramLoginHtml(String clientId, String state, String nonce) {
+    String cid = escapeHtmlAttr(clientId);
+    String st = escapeHtmlAttr(state);
+    String nn = escapeHtmlAttr(nonce);
+    return """
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>Telegram Login</title>
+            <style>
+              :root { color-scheme: light dark; }
+              body { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; padding: 24px; }
+              .wrap { max-width: 520px; margin: 0 auto; }
+              h1 { font-size: 18px; margin: 0 0 12px; }
+              p { opacity: 0.85; line-height: 1.5; margin: 0 0 16px; }
+              .card { border: 1px solid rgba(127,127,127,0.35); border-radius: 14px; padding: 16px; }
+              .status { min-height: 20px; font-size: 13px; margin: 12px 0 0; opacity: 0.82; }
+              .status[data-kind="error"] { color: #d64545; opacity: 1; }
+              .status[data-kind="warn"] { color: #b7791f; opacity: 1; }
+              .hint { font-size: 12px; opacity: 0.7; margin-top: 12px; }
+            </style>
+          </head>
+          <body>
+            <div class="wrap">
+              <h1>Continue with Telegram</h1>
+              <div class="card">
+                <p>Use the official Telegram login flow to continue.</p>
+                <button id="tg-login-btn" class="tg-auth-button" type="button">Continue with Telegram</button>
+                <div id="status" class="status" aria-live="polite"></div>
+                <div class="hint">If Telegram does not open automatically, tap the button above.</div>
+              </div>
+            </div>
+            <div id="cfg"
+              data-client-id="%s"
+              data-state="%s"
+              data-nonce="%s"></div>
+            <script src="https://oauth.telegram.org/js/telegram-login.js?3"></script>
+            <script>
+              (function () {
+                var cfgEl = document.getElementById('cfg');
+                var button = document.getElementById('tg-login-btn');
+                var status = document.getElementById('status');
+                var opening = false;
+
+                function setStatus(message, kind) {
+                  status.textContent = message || '';
+                  status.dataset.kind = kind || '';
+                }
+
+                async function finalizeLogin(idToken) {
+                  setStatus('Finalizing sign-in...');
+                  button.disabled = true;
+                  try {
+                    var response = await fetch('/api/v1/auth/tg/login/complete', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({
+                        state: cfgEl.dataset.state,
+                        idToken: idToken
+                      })
+                    });
+                    var payload = null;
+                    try {
+                      payload = await response.json();
+                    } catch (e) {
+                      payload = null;
+                    }
+                    if (!payload || !payload.redirectUrl) {
+                      throw new Error('missing_redirect');
+                    }
+                    window.location.replace(payload.redirectUrl);
+                  } catch (e) {
+                    button.disabled = false;
+                    setStatus('Telegram sign-in failed. Please try again.', 'error');
+                  }
+                }
+
+                async function handleResult(result) {
+                  opening = false;
+                  if (!result) {
+                    setStatus('Telegram sign-in failed. Please try again.', 'error');
+                    return;
+                  }
+                  if (result.error) {
+                    if (result.error === 'popup_closed') {
+                      setStatus('Login canceled. Tap the button to try again.', 'warn');
+                      return;
+                    }
+                    setStatus('Telegram sign-in failed. Tap the button to try again.', 'error');
+                    return;
+                  }
+                  if (!result.id_token) {
+                    setStatus('Telegram did not return a valid token.', 'error');
+                    return;
+                  }
+                  await finalizeLogin(result.id_token);
+                }
+
+                function beginLogin() {
+                  if (opening) return;
+                  opening = true;
+                  setStatus('Opening Telegram...');
+                  try {
+                    Telegram.Login.auth(
+                      {
+                        client_id: cfgEl.dataset.clientId,
+                        nonce: cfgEl.dataset.nonce
+                      },
+                      handleResult
+                    );
+                  } catch (e) {
+                    opening = false;
+                    setStatus('Unable to open Telegram login. Please tap again.', 'error');
+                  }
+                }
+
+                button.addEventListener('click', beginLogin);
+                window.addEventListener('load', function () {
+                  setTimeout(beginLogin, 200);
+                });
+              })();
+            </script>
+          </body>
+        </html>
+        """
+        .formatted(cid, st, nn);
   }
 
   private static String escapeHtmlAttr(String value) {

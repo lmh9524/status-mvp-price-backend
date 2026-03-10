@@ -38,6 +38,7 @@ public class AuthService {
   private final AuthProperties authProperties;
   private final AuthRedisStore store;
   private final XOAuthClient xOAuthClient;
+  private final TelegramOidcClient telegramOidcClient;
   private final TelegramVerifier telegramVerifier;
   private final AuthRiskService riskService;
   private final AuthJwtService jwtService;
@@ -48,6 +49,7 @@ public class AuthService {
       AuthProperties authProperties,
       AuthRedisStore store,
       XOAuthClient xOAuthClient,
+      TelegramOidcClient telegramOidcClient,
       TelegramVerifier telegramVerifier,
       AuthRiskService riskService,
       AuthJwtService jwtService,
@@ -56,6 +58,7 @@ public class AuthService {
     this.authProperties = authProperties;
     this.store = store;
     this.xOAuthClient = xOAuthClient;
+    this.telegramOidcClient = telegramOidcClient;
     this.telegramVerifier = telegramVerifier;
     this.riskService = riskService;
     this.jwtService = jwtService;
@@ -107,6 +110,57 @@ public class AuthService {
         authProperties.getOauthStateTtlSeconds());
   }
 
+  public AuthDtos.OAuthStartResponse startTelegramLogin(
+      String appRedirectUri, String deviceId, String externalBaseUrl) {
+    ensureAuthEnabled();
+    ensureTgEnabled();
+    validateTelegramLoginLibraryConfig();
+    validateAppRedirect(appRedirectUri);
+    String baseUrl = requireExternalBaseUrl(externalBaseUrl);
+
+    String state;
+    String loginNonce;
+
+    String stateSecret = authProperties.getTg().getStateSecret();
+    if (StringUtils.hasText(stateSecret)) {
+      TelegramOidcStateTokens.Issued issued =
+          TelegramOidcStateTokens.issue(
+              objectMapper,
+              stateSecret,
+              emptyToNull(appRedirectUri),
+              authProperties.getOauthStateTtlSeconds(),
+              now());
+      state = issued.state();
+      loginNonce = issued.codeVerifier();
+    } else {
+      state = AuthUtils.randomBase64Url(24);
+      loginNonce = AuthUtils.randomBase64Url(48);
+      long now = now();
+      OAuthStateRecord stateRecord =
+          new OAuthStateRecord(
+              state,
+              AuthProvider.TG.code(),
+              loginNonce,
+              emptyToNull(appRedirectUri),
+              now,
+              now + authProperties.getOauthStateTtlSeconds() * 1000);
+      store.putOAuthState(stateRecord, authProperties.getOauthStateTtlSeconds());
+    }
+
+    store.putOAuthStateDevice(state, deviceId, authProperties.getOauthStateTtlSeconds());
+    String authorizeUrl =
+        UriComponentsBuilder.fromHttpUrl(baseUrl)
+            .path("/api/v1/auth/tg/login")
+            .queryParam("state", state)
+            .queryParam("nonce", loginNonce)
+            .build(true)
+            .toUriString();
+    return new AuthDtos.OAuthStartResponse(
+        authorizeUrl,
+        state,
+        authProperties.getOauthStateTtlSeconds());
+  }
+
   public void validateAppRedirectUri(String appRedirectUri) {
     validateAppRedirect(appRedirectUri);
   }
@@ -114,11 +168,138 @@ public class AuthService {
   public void validateTgWidgetRequest(String appRedirectUri) {
     ensureAuthEnabled();
     ensureTgEnabled();
+    ensureTgLegacyWidgetEnabled();
     validateAppRedirect(appRedirectUri);
   }
 
   public String telegramBotUsername() {
     return emptyToNull(authProperties.getTg().getBotUsername());
+  }
+
+  public String telegramLoginClientId() {
+    return telegramOidcClient.resolveClientId();
+  }
+
+  public XCallbackResult handleTelegramCallback(
+      String code,
+      String state,
+      String error,
+      String errorDescription,
+      String ip,
+      String deviceId) {
+    ensureAuthEnabled();
+    ensureTgEnabled();
+    validateTelegramOidcCodeFlowConfig();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    String appRedirectUri;
+    String codeVerifier;
+    String effectiveDeviceId = emptyToNull(deviceId);
+
+    String stateSecret = authProperties.getTg().getStateSecret();
+    if (StringUtils.hasText(stateSecret) && TelegramOidcStateTokens.looksLikeToken(state)) {
+      TelegramOidcStateTokens.Parsed parsed =
+          TelegramOidcStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
+      if (parsed == null) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+      }
+      appRedirectUri = parsed.appRedirectUri();
+      codeVerifier = parsed.codeVerifier();
+      if (parsed.expiresAtMs() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      validateAppRedirect(appRedirectUri);
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    } else {
+      OAuthStateRecord stateRecord =
+          store
+              .consumeOAuthState(state)
+              .orElseThrow(
+                  () ->
+                      new AuthException(
+                          AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401));
+      if (stateRecord.expiresAt() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      appRedirectUri = stateRecord.appRedirectUri();
+      codeVerifier = stateRecord.codeVerifier();
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    }
+
+    if (!StringUtils.hasText(deviceId) && StringUtils.hasText(effectiveDeviceId)) {
+      riskService.checkLoginDeviceRateLimit(effectiveDeviceId);
+    }
+    if (StringUtils.hasText(error)) {
+      metrics.loginFailure("tg", "oauth_error");
+      throw new AuthException(
+          AuthErrorCode.OAUTH_EXCHANGE_FAILED,
+          "telegram oauth failed: " + (errorDescription == null ? error : errorDescription),
+          401);
+    }
+    if (!StringUtils.hasText(code)) {
+      metrics.loginFailure("tg", "missing_code");
+      throw new AuthException(AuthErrorCode.OAUTH_EXCHANGE_FAILED, "telegram oauth code missing", 400);
+    }
+
+    String providerUserId = telegramOidcClient.exchangeCodeForProviderUserId(code, codeVerifier);
+    String providerSub = AuthUtils.providerSub(AuthProvider.TG, providerUserId);
+    riskService.checkProviderAllowed(providerSub);
+
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub, effectiveDeviceId);
+    metrics.loginSuccess("tg");
+    return new XCallbackResult(
+        new AuthDtos.AuthCodeResponse(
+            AuthProvider.TG.code(),
+            providerUserId,
+            providerSub,
+            authCode.code(),
+            authProperties.getOneTimeCodeTtlSeconds()),
+        appRedirectUri,
+        state);
+  }
+
+  public XCallbackResult completeTelegramLogin(
+      String state,
+      String idToken,
+      String ip,
+      String deviceId) {
+    ensureAuthEnabled();
+    ensureTgEnabled();
+    validateTelegramLoginLibraryConfig();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    ResolvedTelegramLoginState resolved = consumeTelegramLoginState(state, deviceId);
+    if (!StringUtils.hasText(deviceId) && StringUtils.hasText(resolved.deviceId())) {
+      riskService.checkLoginDeviceRateLimit(resolved.deviceId());
+    }
+    if (!StringUtils.hasText(idToken)) {
+      metrics.loginFailure("tg", "missing_id_token");
+      throw new AuthException(AuthErrorCode.UNAUTHORIZED, "telegram id token missing", 401);
+    }
+
+    TelegramOidcClient.ValidatedIdentity identity =
+        telegramOidcClient.validateIdToken(idToken, resolved.nonce());
+    String providerUserId = identity.providerUserId();
+    String providerSub = AuthUtils.providerSub(AuthProvider.TG, providerUserId);
+    riskService.checkProviderAllowed(providerSub);
+
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub, resolved.deviceId());
+    metrics.loginSuccess("tg");
+    return new XCallbackResult(
+        new AuthDtos.AuthCodeResponse(
+            AuthProvider.TG.code(),
+            providerUserId,
+            providerSub,
+            authCode.code(),
+            authProperties.getOneTimeCodeTtlSeconds()),
+        resolved.appRedirectUri(),
+        state);
   }
 
   public XCallbackResult handleXCallback(
@@ -222,7 +403,7 @@ public class AuthService {
     String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
-    AuthCodeRecord authCode = issueAuthCode(AuthProvider.X, providerUserId, providerSub);
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.X, providerUserId, providerSub, effectiveDeviceId);
     metrics.loginSuccess("x");
     return new XCallbackResult(
         new AuthDtos.AuthCodeResponse(
@@ -292,7 +473,7 @@ public class AuthService {
     String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
-    AuthCodeRecord authCode = issueAuthCode(AuthProvider.X, providerUserId, providerSub);
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.X, providerUserId, providerSub, deviceId.trim());
     metrics.loginSuccess("x");
     return new AuthDtos.AuthCodeResponse(
         AuthProvider.X.code(),
@@ -306,6 +487,7 @@ public class AuthService {
       AuthDtos.TelegramLoginRequest request, String ip, String deviceId) {
     ensureAuthEnabled();
     ensureTgEnabled();
+    ensureTgLegacyWidgetEnabled();
     riskService.checkIpAllowed(ip);
     riskService.checkLoginRateLimits(ip, deviceId);
     validateAppRedirect(request.appRedirectUri());
@@ -314,7 +496,7 @@ public class AuthService {
     String providerSub = AuthUtils.providerSub(AuthProvider.TG, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
-    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub);
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub, emptyToNull(deviceId));
     metrics.loginSuccess("tg");
     return new AuthDtos.AuthCodeResponse(
         AuthProvider.TG.code(),
@@ -324,9 +506,9 @@ public class AuthService {
         authProperties.getOneTimeCodeTtlSeconds());
   }
 
-  public AuthDtos.ExchangeResponse exchange(AuthDtos.ExchangeRequest request) {
+  public AuthDtos.ExchangeResponse exchange(AuthDtos.ExchangeRequest request, String deviceId) {
     ensureAuthEnabled();
-    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code());
+    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId);
     String providerSub = codeRecord.providerSub();
     String walletSub = resolveOrCreateWalletForProvider(codeRecord);
     String nonce = request.nonce();
@@ -360,9 +542,9 @@ public class AuthService {
         authProperties.getRefreshTokenTtlSeconds());
   }
 
-  public AuthDtos.Web3authJwtResponse web3authJwt(AuthDtos.ExchangeRequest request) {
+  public AuthDtos.Web3authJwtResponse web3authJwt(AuthDtos.ExchangeRequest request, String deviceId) {
     ensureAuthEnabled();
-    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code());
+    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId);
     String providerSub = codeRecord.providerSub();
     String nonce = request.nonce();
     String web3authJwt =
@@ -545,13 +727,13 @@ public class AuthService {
     return new AuthDtos.MeResponse(walletSub, providers);
   }
 
-  public AuthDtos.MeResponse bindProvider(String authorizationHeader, AuthDtos.BindRequest request) {
+  public AuthDtos.MeResponse bindProvider(String authorizationHeader, AuthDtos.BindRequest request, String deviceId) {
     ensureAuthEnabled();
     ensureBindEnabled();
     String walletSub = requireWalletSubFromAccessToken(authorizationHeader);
     riskService.checkBindRateLimit(walletSub);
 
-    AuthCodeRecord codeRecord = consumeValidAuthCode(request.authCode());
+    AuthCodeRecord codeRecord = consumeValidAuthCode(request.authCode(), deviceId);
     String providerSub = codeRecord.providerSub();
 
     Optional<String> existingOwner = store.getWalletSubByProviderSub(providerSub);
@@ -660,9 +842,6 @@ public class AuthService {
   public String callbackRedirectUrl(String appRedirectUri, AuthDtos.AuthCodeResponse response, String state) {
     UriComponentsBuilder b =
         UriComponentsBuilder.fromUriString(appRedirectUri)
-            .queryParam("provider", response.provider())
-            .queryParam("providerUserId", response.providerUserId())
-            .queryParam("providerSub", response.providerSub())
             .queryParam("authCode", response.code());
     if (StringUtils.hasText(state)) {
       b = b.queryParam("state", state);
@@ -679,6 +858,28 @@ public class AuthService {
         XOAuthStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
     if (parsed == null) return null;
     String appRedirectUri = parsed.appRedirectUri();
+    if (!StringUtils.hasText(appRedirectUri)) return null;
+    try {
+      validateAppRedirect(appRedirectUri);
+    } catch (Exception ignored) {
+      return null;
+    }
+    return appRedirectUri;
+  }
+
+  public String tryResolveTelegramAppRedirectUri(String state) {
+    String stateSecret = authProperties.getTg().getStateSecret();
+    String appRedirectUri;
+    if (StringUtils.hasText(stateSecret) && TelegramOidcStateTokens.looksLikeToken(state)) {
+      TelegramOidcStateTokens.Parsed parsed =
+          TelegramOidcStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
+      if (parsed == null) return null;
+      appRedirectUri = parsed.appRedirectUri();
+    } else {
+      OAuthStateRecord record = store.peekOAuthState(state).orElse(null);
+      if (record == null || !AuthProvider.TG.code().equals(record.provider())) return null;
+      appRedirectUri = record.appRedirectUri();
+    }
     if (!StringUtils.hasText(appRedirectUri)) return null;
     try {
       validateAppRedirect(appRedirectUri);
@@ -706,6 +907,54 @@ public class AuthService {
       }
     }
     return b.build().encode().toUriString();
+  }
+
+  private ResolvedTelegramLoginState consumeTelegramLoginState(String state, String deviceId) {
+    String appRedirectUri;
+    String nonce;
+    String effectiveDeviceId = emptyToNull(deviceId);
+
+    String stateSecret = authProperties.getTg().getStateSecret();
+    if (StringUtils.hasText(stateSecret) && TelegramOidcStateTokens.looksLikeToken(state)) {
+      TelegramOidcStateTokens.Parsed parsed =
+          TelegramOidcStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
+      if (parsed == null) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+      }
+      appRedirectUri = parsed.appRedirectUri();
+      nonce = parsed.codeVerifier();
+      if (parsed.expiresAtMs() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      validateAppRedirect(appRedirectUri);
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    } else {
+      OAuthStateRecord stateRecord =
+          store
+              .consumeOAuthState(state)
+              .orElseThrow(
+                  () ->
+                      new AuthException(
+                          AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401));
+      if (!AuthProvider.TG.code().equals(stateRecord.provider())) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+      }
+      if (stateRecord.expiresAt() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      appRedirectUri = stateRecord.appRedirectUri();
+      nonce = stateRecord.codeVerifier();
+      validateAppRedirect(appRedirectUri);
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    }
+    if (!StringUtils.hasText(nonce)) {
+      throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+    }
+    return new ResolvedTelegramLoginState(appRedirectUri, nonce, effectiveDeviceId);
   }
 
   private SyncFavorites mergeFavorites(
@@ -808,12 +1057,35 @@ public class AuthService {
     return ("0x" + hex).toLowerCase(Locale.ROOT);
   }
 
-  private AuthCodeRecord consumeValidAuthCode(String code) {
+  private static String requireExternalBaseUrl(String externalBaseUrl) {
+    String baseUrl = emptyToNull(externalBaseUrl);
+    if (baseUrl == null) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "missing base url", 400);
+    }
+    try {
+      URI parsed = URI.create(baseUrl);
+      if (!StringUtils.hasText(parsed.getScheme()) || !StringUtils.hasText(parsed.getHost())) {
+        throw new IllegalArgumentException("invalid base url");
+      }
+    } catch (Exception e) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "invalid base url", 400);
+    }
+    return baseUrl;
+  }
+
+  private AuthCodeRecord consumeValidAuthCode(String code, String deviceId) {
     long now = now();
     AuthCodeRecord record =
         store
             .getAuthCode(code)
             .orElseThrow(() -> new AuthException(AuthErrorCode.AUTH_CODE_INVALID, "invalid auth code", 401));
+    String expectedDeviceId = emptyToNull(record.deviceId());
+    String actualDeviceId = emptyToNull(deviceId);
+    if (expectedDeviceId != null) {
+      if (actualDeviceId == null || !expectedDeviceId.equals(actualDeviceId)) {
+        throw new AuthException(AuthErrorCode.UNAUTHORIZED, "auth code device mismatch", 401);
+      }
+    }
     long remainingMs = record.expiresAt() - now;
     long ttlSeconds = Math.max(1, (remainingMs + 999) / 1000);
     boolean firstUse = store.markAuthCodeUsedOnce(record.code(), ttlSeconds);
@@ -832,6 +1104,7 @@ public class AuthService {
             record.provider(),
             record.providerUserId(),
             record.providerSub(),
+            record.deviceId(),
             record.createdAt(),
             record.expiresAt(),
             now);
@@ -877,14 +1150,19 @@ public class AuthService {
   }
 
   private AuthCodeRecord issueAuthCode(
-      AuthProvider provider, String providerUserId, String providerSub) {
+      AuthProvider provider, String providerUserId, String providerSub, String deviceId) {
     long now = now();
+    String normalizedDeviceId = emptyToNull(deviceId);
+    if (!StringUtils.hasText(normalizedDeviceId)) {
+      throw new AuthException(AuthErrorCode.UNAUTHORIZED, "missing device id", 401);
+    }
     AuthCodeRecord authCode =
         new AuthCodeRecord(
             AuthUtils.randomBase64Url(24),
             provider.code(),
             providerUserId,
             providerSub,
+            normalizedDeviceId,
             now,
             now + authProperties.getOneTimeCodeTtlSeconds() * 1000,
             null);
@@ -957,6 +1235,32 @@ public class AuthService {
     }
   }
 
+  private void ensureTgLegacyWidgetEnabled() {
+    if (!authProperties.getTg().isLegacyWidgetEnabled()) {
+      throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "telegram legacy widget disabled", 403);
+    }
+  }
+
+  private void validateTelegramLoginLibraryConfig() {
+    AuthProperties.Tg tg = authProperties.getTg();
+    if (!StringUtils.hasText(tg.resolvedClientId())
+        || !StringUtils.hasText(tg.getJwksUri())
+        || !StringUtils.hasText(tg.getIssuer())) {
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "telegram login not configured", 503);
+    }
+  }
+
+  private void validateTelegramOidcCodeFlowConfig() {
+    AuthProperties.Tg tg = authProperties.getTg();
+    validateTelegramLoginLibraryConfig();
+    if (!StringUtils.hasText(tg.getClientSecret())
+        || !StringUtils.hasText(tg.getRedirectUri())
+        || !StringUtils.hasText(tg.getAuthorizeEndpoint())
+        || !StringUtils.hasText(tg.getTokenEndpoint())) {
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "telegram oauth not configured", 503);
+    }
+  }
+
   private void ensureBindEnabled() {
     if (!authProperties.isBindEnabled()) {
       throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "provider bind disabled", 403);
@@ -980,4 +1284,6 @@ public class AuthService {
   }
 
   public record XCallbackResult(AuthDtos.AuthCodeResponse payload, String appRedirectUri, String state) {}
+
+  private record ResolvedTelegramLoginState(String appRedirectUri, String nonce, String deviceId) {}
 }

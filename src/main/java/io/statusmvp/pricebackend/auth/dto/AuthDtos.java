@@ -12,7 +12,11 @@ import java.util.List;
 public final class AuthDtos {
   private AuthDtos() {}
 
+  public record OAuthStartResponse(String authorizeUrl, String state, long expiresInSeconds) {}
+
   public record XStartResponse(String authorizeUrl, String state, long expiresInSeconds) {}
+
+  public record RedirectResponse(String redirectUrl) {}
 
   public record XResumeRequest(@NotBlank String resumeToken) {}
 
@@ -64,6 +68,11 @@ public final class AuthDtos {
       @NotBlank String hash,
       @JsonAlias("app_redirect_uri")
       String appRedirectUri) {}
+
+  public record TelegramOidcCompleteRequest(
+      @NotBlank String state,
+      @JsonAlias("id_token")
+      @NotBlank String idToken) {}
 
   public record Web3authJwtResponse(
       String provider,
