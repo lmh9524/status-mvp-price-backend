@@ -8,9 +8,11 @@ import io.statusmvp.pricebackend.auth.model.RefreshTokenRecord;
 import io.statusmvp.pricebackend.auth.model.SiweNonceRecord;
 import io.statusmvp.pricebackend.auth.model.WalletProfile;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.TimeUnit;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
 @Service
@@ -24,6 +26,12 @@ public class AuthRedisStore {
   private static final String PREFIX_REFRESH = "auth:refresh:";
   private static final String PREFIX_JTI = "auth:jti:";
   private static final String PREFIX_SIWE_NONCE = "auth:siwe:nonce:";
+  private static final DefaultRedisScript<String> GET_AND_DELETE_SCRIPT =
+      new DefaultRedisScript<>(
+          "local value = redis.call('GET', KEYS[1]); "
+              + "if value then redis.call('DEL', KEYS[1]); end; "
+              + "return value",
+          String.class);
 
   private final StringRedisTemplate redis;
   private final ObjectMapper objectMapper;
@@ -62,7 +70,7 @@ public class AuthRedisStore {
   public Optional<String> consumeOAuthStateDevice(String state) {
     if (state == null || state.isBlank()) return Optional.empty();
     String key = PREFIX_OAUTH_STATE_DEVICE + state;
-    String out = redis.opsForValue().getAndDelete(key);
+    String out = getAndDeleteRaw(key);
     if (out == null || out.isBlank()) return Optional.empty();
     return Optional.of(out.trim());
   }
@@ -166,12 +174,16 @@ public class AuthRedisStore {
 
   private <T> Optional<T> getAndDeleteJson(String key, Class<T> type) {
     try {
-      String raw = redis.opsForValue().getAndDelete(key);
+      String raw = getAndDeleteRaw(key);
       if (raw == null || raw.isBlank()) return Optional.empty();
       return Optional.of(objectMapper.readValue(raw, type));
     } catch (Exception e) {
       return Optional.empty();
     }
+  }
+
+  private String getAndDeleteRaw(String key) {
+    return redis.execute(GET_AND_DELETE_SCRIPT, List.of(key));
   }
 
   private void putJson(String key, Object payload, long ttlSeconds) {
