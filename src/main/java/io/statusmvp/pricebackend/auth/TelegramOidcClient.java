@@ -9,6 +9,7 @@ import com.nimbusds.jose.jwk.JWKSet;
 import com.nimbusds.jose.jwk.RSAKey;
 import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
+import java.net.URI;
 import java.nio.charset.StandardCharsets;
 import java.security.interfaces.RSAPublicKey;
 import java.text.ParseException;
@@ -56,15 +57,17 @@ public class TelegramOidcClient {
   public String buildAuthorizeUrl(String state, String codeChallenge) {
     AuthProperties.Tg tg = authProperties.getTg();
     String clientId = resolveClientId();
+    String redirectUri = tg.getRedirectUri();
     String scope = String.join(" ", tg.scopeList());
     return UriComponentsBuilder.fromUriString(tg.getAuthorizeEndpoint())
         .queryParam("response_type", "code")
         .queryParam("client_id", clientId)
-        .queryParam("redirect_uri", tg.getRedirectUri())
+        .queryParam("redirect_uri", redirectUri)
         .queryParam("scope", scope)
         .queryParam("state", state)
         .queryParam("code_challenge", codeChallenge)
         .queryParam("code_challenge_method", "S256")
+        .queryParam("origin", resolveOrigin(redirectUri))
         .build()
         .encode(StandardCharsets.UTF_8)
         .toUriString();
@@ -235,6 +238,29 @@ public class TelegramOidcClient {
     if (match != null) return match;
 
     throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "telegram jwks unavailable", 503, 3, Map.of());
+  }
+
+  private static String resolveOrigin(String redirectUri) {
+    try {
+      URI uri = URI.create(redirectUri);
+      if (uri.getScheme() == null || uri.getHost() == null) {
+        throw new IllegalArgumentException("redirect uri missing origin");
+      }
+      int port = uri.getPort();
+      boolean includePort =
+          port >= 0
+              && !(port == 80 && "http".equalsIgnoreCase(uri.getScheme()))
+              && !(port == 443 && "https".equalsIgnoreCase(uri.getScheme()));
+      StringBuilder builder = new StringBuilder();
+      builder.append(uri.getScheme()).append("://").append(uri.getHost());
+      if (includePort) {
+        builder.append(':').append(port);
+      }
+      return builder.toString();
+    } catch (Exception e) {
+      throw new AuthException(
+          AuthErrorCode.PROVIDER_UNAVAILABLE, "telegram redirect origin invalid", 503);
+    }
   }
 
   private synchronized JWKSet loadJwkSet(boolean forceRefresh) {

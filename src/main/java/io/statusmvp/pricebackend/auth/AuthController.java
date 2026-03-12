@@ -3,11 +3,11 @@ package io.statusmvp.pricebackend.auth;
 import io.statusmvp.pricebackend.auth.dto.AuthDtos;
 import jakarta.validation.Valid;
 import java.util.Locale;
-import org.springframework.util.StringUtils;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.StringUtils;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
@@ -56,12 +56,42 @@ public class AuthController {
         .subscribeOn(Schedulers.boundedElastic());
   }
 
-  @GetMapping(path = "/api/v1/auth/tg/login", produces = MediaType.TEXT_HTML_VALUE)
-  public Mono<ResponseEntity<String>> telegramLoginPage(
-      @RequestParam(value = "state") String state,
-      @RequestParam(value = "nonce") String nonce) {
+  @GetMapping(path = "/api/v1/auth/tg/login")
+  public Mono<ResponseEntity<?>> telegramLoginPage(
+      @RequestParam(value = "state", required = false) String state,
+      @RequestParam(value = "nonce", required = false) String nonce,
+      @RequestParam(value = "code", required = false) String code,
+      @RequestParam(value = "error", required = false) String error,
+      @RequestParam(value = "error_description", required = false) String errorDescription,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
     return Mono.fromCallable(
             () -> {
+              if (StringUtils.hasText(code) || StringUtils.hasText(error)) {
+                String ip = resolveClientIp(exchange);
+                try {
+                  AuthService.XCallbackResult result =
+                      authService.handleTelegramCallback(code, state, error, errorDescription, ip, deviceId);
+                  if (result.appRedirectUri() != null && !result.appRedirectUri().isBlank()) {
+                    String location =
+                        authService.callbackRedirectUrl(
+                            result.appRedirectUri(), result.payload(), result.state());
+                    return ResponseEntity.status(HttpStatus.FOUND)
+                        .header(HttpHeaders.LOCATION, location)
+                        .build();
+                  }
+                  return ResponseEntity.ok(result.payload());
+                } catch (AuthException e) {
+                  String appRedirectUri = authService.tryResolveTelegramAppRedirectUri(state);
+                  if (appRedirectUri != null && !appRedirectUri.isBlank()) {
+                    String location = authService.callbackErrorRedirectUrl(appRedirectUri, e, state);
+                    return ResponseEntity.status(HttpStatus.FOUND)
+                        .header(HttpHeaders.LOCATION, location)
+                        .build();
+                  }
+                  throw e;
+                }
+              }
               String clientId = authService.telegramLoginClientId();
               if (!StringUtils.hasText(state) || !StringUtils.hasText(nonce)) {
                 throw new AuthException(AuthErrorCode.BAD_REQUEST, "telegram login state missing", 400);
@@ -123,6 +153,8 @@ public class AuthController {
             () -> {
               String ip = resolveClientIp(exchange);
               try {
+                AuthService.TelegramWidgetStartContext widgetContext =
+                    authService.consumeTelegramWidgetStartContext(state, deviceId, appRedirectUri);
                 AuthDtos.TelegramLoginRequest request =
                     new AuthDtos.TelegramLoginRequest(
                         id == null ? "" : id,
@@ -132,9 +164,11 @@ public class AuthController {
                         photoUrl,
                         authDate == null ? "" : authDate,
                         hash == null ? "" : hash,
-                        appRedirectUri);
-                AuthDtos.AuthCodeResponse result = authService.telegramLogin(request, ip, deviceId);
-                String location = authService.callbackRedirectUrl(appRedirectUri, result, state);
+                        widgetContext.appRedirectUri());
+                AuthDtos.AuthCodeResponse result =
+                    authService.telegramLogin(request, ip, widgetContext.deviceId());
+                String location =
+                    authService.callbackRedirectUrl(widgetContext.appRedirectUri(), result, state);
                 return ResponseEntity.status(HttpStatus.FOUND).header(HttpHeaders.LOCATION, location).build();
               } catch (AuthException e) {
                 try {
@@ -261,6 +295,47 @@ public class AuthController {
               }
             })
         .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @PostMapping(
+      path = "/api/v1/auth/tg/login/complete",
+      consumes = MediaType.APPLICATION_FORM_URLENCODED_VALUE)
+  public Mono<ResponseEntity<Void>> telegramLoginCompleteForm(
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    return exchange
+        .getFormData()
+        .flatMap(
+            form ->
+                Mono.<ResponseEntity<Void>>fromCallable(
+                        () -> {
+                          String state =
+                              StringUtils.trimWhitespace(form == null ? null : form.getFirst("state"));
+                          String idToken =
+                              StringUtils.trimWhitespace(form == null ? null : form.getFirst("idToken"));
+                          String ip = resolveClientIp(exchange);
+                          String appRedirectUri = authService.tryResolveTelegramAppRedirectUri(state);
+                          try {
+                            AuthService.XCallbackResult result =
+                                authService.completeTelegramLogin(state, idToken, ip, deviceId);
+                            String location =
+                                authService.callbackRedirectUrl(
+                                    result.appRedirectUri(), result.payload(), result.state());
+                            return ResponseEntity.status(HttpStatus.FOUND)
+                                .header(HttpHeaders.LOCATION, location)
+                                .build();
+                          } catch (AuthException e) {
+                            if (StringUtils.hasText(appRedirectUri)) {
+                              String location =
+                                  authService.callbackErrorRedirectUrl(appRedirectUri, e, state);
+                              return ResponseEntity.status(HttpStatus.FOUND)
+                                  .header(HttpHeaders.LOCATION, location)
+                                  .build();
+                            }
+                            throw e;
+                          }
+                        })
+                    .subscribeOn(Schedulers.boundedElastic()));
   }
 
   @PostMapping(path = "/api/v1/auth/exchange", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -513,181 +588,132 @@ public class AuthController {
               data-client-id="%s"
               data-state="%s"
               data-nonce="%s"></div>
+            <script src="https://oauth.telegram.org/js/telegram-login.js?3" async></script>
             <script>
               (function () {
                 var cfgEl = document.getElementById('cfg');
                 var button = document.getElementById('tg-login-btn');
                 var status = document.getElementById('status');
                 var opening = false;
-                var popup = null;
-                var closeTimer = null;
-                var OIDC_ORIGIN = 'https://oauth.telegram.org';
-                var OIDC_URL = OIDC_ORIGIN + '/auth';
-                var SCOPES = 'openid profile';
 
                 function setStatus(message, kind) {
                   status.textContent = message || '';
                   status.dataset.kind = kind || '';
                 }
 
-                function buildAuthUrl() {
-                  var origin = window.location.origin || '';
-                  if (!origin) {
-                    throw new Error('missing_origin');
-                  }
-                  var redirectUri = origin + window.location.pathname;
-                  var params = new URLSearchParams();
-                  params.set('response_type', 'post_message');
-                  params.set('client_id', cfgEl.dataset.clientId);
-                  params.set('redirect_uri', redirectUri);
-                  params.set('scope', SCOPES);
-                  params.set('origin', origin);
-                  if (cfgEl.dataset.nonce) {
-                    params.set('nonce', cfgEl.dataset.nonce);
-                  }
-                  return OIDC_URL + '?' + params.toString();
+                function appendHiddenField(form, name, value) {
+                  var input = document.createElement('input');
+                  input.type = 'hidden';
+                  input.name = name;
+                  input.value = value || '';
+                  form.appendChild(input);
                 }
 
-                function cleanupPopup() {
-                  if (closeTimer) {
-                    clearTimeout(closeTimer);
-                    closeTimer = null;
-                  }
-                  if (popup && !popup.closed) {
-                    try {
-                      popup.close();
-                    } catch (e) {
-                    }
-                  }
-                  popup = null;
-                }
-
-                function startClosePolling() {
-                  if (!popup) return;
-                  closeTimer = setTimeout(function checkClosed() {
-                    if (!popup || popup.closed) {
-                      cleanupPopup();
-                      if (opening) {
-                        opening = false;
-                        setStatus('Login canceled. Tap the button to try again.', 'warn');
-                      }
-                      return;
-                    }
-                    closeTimer = setTimeout(checkClosed, 250);
-                  }, 250);
-                }
-
-                function parseAuthResult(raw) {
-                  var data = raw;
-                  if (typeof raw === 'string') {
-                    try {
-                      data = JSON.parse(raw);
-                    } catch (e) {
-                      return { error: 'malformed_message' };
-                    }
-                  }
-                  if (!data || data.event !== 'auth_result') {
-                    return null;
-                  }
-                  if (data.error) {
-                    return { error: data.error };
-                  }
-                  if (!data.result || typeof data.result !== 'string') {
-                    return { error: 'missing_id_token' };
-                  }
-                  return { id_token: data.result };
-                }
-
-                async function finalizeLogin(idToken) {
+                function finalizeLogin(idToken) {
                   setStatus('Finalizing sign-in...');
                   button.disabled = true;
-                  try {
-                    var response = await fetch('/api/v1/auth/tg/login/complete', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        state: cfgEl.dataset.state,
-                        idToken: idToken
-                      })
-                    });
-                    var payload = null;
-                    try {
-                      payload = await response.json();
-                    } catch (e) {
-                      payload = null;
-                    }
-                    if (!payload || !payload.redirectUrl) {
-                      throw new Error('missing_redirect');
-                    }
-                    window.location.replace(payload.redirectUrl);
-                  } catch (e) {
-                    button.disabled = false;
-                    setStatus('Telegram sign-in failed. Please try again.', 'error');
-                  }
+                  var form = document.createElement('form');
+                  form.method = 'POST';
+                  form.action = '/api/v1/auth/tg/login/complete';
+                  appendHiddenField(form, 'state', cfgEl.dataset.state);
+                  appendHiddenField(form, 'idToken', idToken);
+                  document.body.appendChild(form);
+                  form.submit();
                 }
 
-                function handleMessage(event) {
-                  if (event.origin !== OIDC_ORIGIN) {
-                    return;
-                  }
-                  if (popup && event.source && event.source !== popup) {
-                    return;
-                  }
-                  var result = parseAuthResult(event.data);
-                  if (!result) {
-                    return;
-                  }
-                  cleanupPopup();
+                function handleAuthResult(result) {
                   opening = false;
+                  button.disabled = false;
+                  if (!result || typeof result !== 'object') {
+                    setStatus('Telegram sign-in failed. Tap the button to try again.', 'error');
+                    return;
+                  }
                   if (result.error) {
-                    if (result.error === 'popup_closed') {
+                    var errorCode = String(result.error).toLowerCase();
+                    if (errorCode === 'popup_closed' || errorCode === 'cancelled' || errorCode === 'canceled') {
                       setStatus('Login canceled. Tap the button to try again.', 'warn');
                       return;
                     }
-                    if (result.error === 'origin_required' || result.error === 'origin required') {
+                    if (errorCode === 'origin_required' || errorCode === 'origin required') {
                       setStatus('Telegram requires a valid website origin for this login flow.', 'error');
                       return;
                     }
                     setStatus('Telegram sign-in failed. Tap the button to try again.', 'error');
                     return;
                   }
-                  void finalizeLogin(result.id_token);
+                  if (!result.id_token || typeof result.id_token !== 'string') {
+                    setStatus('Telegram sign-in failed. Tap the button to try again.', 'error');
+                    return;
+                  }
+                  finalizeLogin(result.id_token);
                 }
 
-                function beginLogin(event) {
+                function loginApi() {
+                  if (!window.Telegram || !window.Telegram.Login || typeof window.Telegram.Login.auth !== 'function') {
+                    return null;
+                  }
+                  return window.Telegram.Login;
+                }
+
+                function withPatchedTelegramWindowOpen(run) {
+                  var originalOpen = window.open;
+                  window.open = function(url, name, features) {
+                    try {
+                      if (typeof url === 'string' && url.indexOf('https://oauth.telegram.org/auth?') === 0) {
+                        var patched = new URL(url, window.location.href);
+                        if (!patched.searchParams.get('origin')) {
+                          patched.searchParams.set('origin', window.location.origin || '');
+                        }
+                        url = patched.toString();
+                      }
+                    } catch (e) {
+                    }
+                    return originalOpen.call(window, url, name, features);
+                  };
+                  try {
+                    return run();
+                  } finally {
+                    window.open = originalOpen;
+                  }
+                }
+
+                function beginLogin(event, retryCount) {
                   if (event && typeof event.preventDefault === 'function') {
                     event.preventDefault();
                   }
                   if (opening) return;
                   opening = true;
+                  button.disabled = true;
                   setStatus('Opening Telegram...');
                   try {
-                    cleanupPopup();
-                    var width = 550;
-                    var height = 650;
-                    var left = Math.max(0, (screen.width - width) / 2) + (screen.availLeft || 0);
-                    var top = Math.max(0, (screen.height - height) / 2) + (screen.availTop || 0);
-                    var features = 'width=' + width + ',height=' + height
-                      + ',left=' + left + ',top=' + top
-                      + ',status=0,location=0,menubar=0,toolbar=0';
-                    popup = window.open(buildAuthUrl(), 'telegram_oidc_login', features);
-                    if (!popup) {
+                    var api = loginApi();
+                    if (!api) {
                       opening = false;
-                      setStatus('Unable to open Telegram login. Please allow popups and try again.', 'error');
+                      button.disabled = false;
+                      if ((retryCount || 0) < 10) {
+                        setTimeout(function () {
+                          beginLogin(null, (retryCount || 0) + 1);
+                        }, 150);
+                        return;
+                      }
+                      setStatus('Telegram login library is not available. Please try again.', 'error');
                       return;
                     }
-                    try {
-                      popup.focus();
-                    } catch (e) {
+                    var clientId = Number(cfgEl.dataset.clientId);
+                    var options = { client_id: Number.isFinite(clientId) ? clientId : cfgEl.dataset.clientId };
+                    if (cfgEl.dataset.nonce) {
+                      options.nonce = cfgEl.dataset.nonce;
                     }
-                    startClosePolling();
+                    withPatchedTelegramWindowOpen(function () {
+                      api.auth(options, handleAuthResult);
+                    });
                   } catch (e) {
                     opening = false;
+                    button.disabled = false;
                     setStatus('Unable to open Telegram login. Please tap again.', 'error');
                   }
                 }
 
-                window.addEventListener('message', handleMessage);
                 button.addEventListener('click', beginLogin);
                 window.addEventListener('load', function () {
                   setTimeout(beginLogin, 200);

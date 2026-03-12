@@ -114,7 +114,7 @@ public class AuthService {
       String appRedirectUri, String deviceId, String externalBaseUrl) {
     ensureAuthEnabled();
     ensureTgEnabled();
-    validateTelegramLoginLibraryConfig();
+    ensureTgLegacyWidgetEnabled();
     validateAppRedirect(appRedirectUri);
     String baseUrl = requireExternalBaseUrl(externalBaseUrl);
 
@@ -150,15 +150,31 @@ public class AuthService {
     store.putOAuthStateDevice(state, deviceId, authProperties.getOauthStateTtlSeconds());
     String authorizeUrl =
         UriComponentsBuilder.fromHttpUrl(baseUrl)
-            .path("/api/v1/auth/tg/login")
+            .path("/api/v1/auth/tg/widget")
+            .queryParam("appRedirectUri", appRedirectUri)
             .queryParam("state", state)
-            .queryParam("nonce", loginNonce)
             .build(true)
             .toUriString();
     return new AuthDtos.OAuthStartResponse(
         authorizeUrl,
         state,
         authProperties.getOauthStateTtlSeconds());
+  }
+
+  public TelegramWidgetStartContext consumeTelegramWidgetStartContext(
+      String state, String deviceId, String appRedirectUri) {
+    ensureAuthEnabled();
+    ensureTgEnabled();
+    ensureTgLegacyWidgetEnabled();
+    ResolvedTelegramLoginState resolved = consumeTelegramLoginState(state, deviceId);
+    if (!StringUtils.hasText(appRedirectUri)) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "telegram widget redirect missing", 400);
+    }
+    validateAppRedirect(appRedirectUri);
+    if (!appRedirectUri.equals(resolved.appRedirectUri())) {
+      throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+    }
+    return new TelegramWidgetStartContext(resolved.appRedirectUri(), resolved.deviceId());
   }
 
   public void validateAppRedirectUri(String appRedirectUri) {
@@ -1284,6 +1300,8 @@ public class AuthService {
   }
 
   public record XCallbackResult(AuthDtos.AuthCodeResponse payload, String appRedirectUri, String state) {}
+
+  public record TelegramWidgetStartContext(String appRedirectUri, String deviceId) {}
 
   private record ResolvedTelegramLoginState(String appRedirectUri, String nonce, String deviceId) {}
 }
