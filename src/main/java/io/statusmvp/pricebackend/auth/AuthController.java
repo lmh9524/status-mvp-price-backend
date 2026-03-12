@@ -480,6 +480,19 @@ public class AuthController {
               h1 { font-size: 18px; margin: 0 0 12px; }
               p { opacity: 0.85; line-height: 1.5; margin: 0 0 16px; }
               .card { border: 1px solid rgba(127,127,127,0.35); border-radius: 14px; padding: 16px; }
+              .tg-auth-button {
+                appearance: none;
+                border: none;
+                border-radius: 999px;
+                background: #119af5;
+                color: white;
+                font-weight: 600;
+                font-size: 16px;
+                min-height: 44px;
+                padding: 0 28px;
+                cursor: pointer;
+              }
+              .tg-auth-button:disabled { opacity: 0.72; cursor: default; }
               .status { min-height: 20px; font-size: 13px; margin: 12px 0 0; opacity: 0.82; }
               .status[data-kind="error"] { color: #d64545; opacity: 1; }
               .status[data-kind="warn"] { color: #b7791f; opacity: 1; }
@@ -500,17 +513,89 @@ public class AuthController {
               data-client-id="%s"
               data-state="%s"
               data-nonce="%s"></div>
-            <script src="https://oauth.telegram.org/js/telegram-login.js?3"></script>
             <script>
               (function () {
                 var cfgEl = document.getElementById('cfg');
                 var button = document.getElementById('tg-login-btn');
                 var status = document.getElementById('status');
                 var opening = false;
+                var popup = null;
+                var closeTimer = null;
+                var OIDC_ORIGIN = 'https://oauth.telegram.org';
+                var OIDC_URL = OIDC_ORIGIN + '/auth';
+                var SCOPES = 'openid profile';
 
                 function setStatus(message, kind) {
                   status.textContent = message || '';
                   status.dataset.kind = kind || '';
+                }
+
+                function buildAuthUrl() {
+                  var origin = window.location.origin || '';
+                  if (!origin) {
+                    throw new Error('missing_origin');
+                  }
+                  var redirectUri = origin + window.location.pathname;
+                  var params = new URLSearchParams();
+                  params.set('response_type', 'post_message');
+                  params.set('client_id', cfgEl.dataset.clientId);
+                  params.set('redirect_uri', redirectUri);
+                  params.set('scope', SCOPES);
+                  params.set('origin', origin);
+                  if (cfgEl.dataset.nonce) {
+                    params.set('nonce', cfgEl.dataset.nonce);
+                  }
+                  return OIDC_URL + '?' + params.toString();
+                }
+
+                function cleanupPopup() {
+                  if (closeTimer) {
+                    clearTimeout(closeTimer);
+                    closeTimer = null;
+                  }
+                  if (popup && !popup.closed) {
+                    try {
+                      popup.close();
+                    } catch (e) {
+                    }
+                  }
+                  popup = null;
+                }
+
+                function startClosePolling() {
+                  if (!popup) return;
+                  closeTimer = setTimeout(function checkClosed() {
+                    if (!popup || popup.closed) {
+                      cleanupPopup();
+                      if (opening) {
+                        opening = false;
+                        setStatus('Login canceled. Tap the button to try again.', 'warn');
+                      }
+                      return;
+                    }
+                    closeTimer = setTimeout(checkClosed, 250);
+                  }, 250);
+                }
+
+                function parseAuthResult(raw) {
+                  var data = raw;
+                  if (typeof raw === 'string') {
+                    try {
+                      data = JSON.parse(raw);
+                    } catch (e) {
+                      return { error: 'malformed_message' };
+                    }
+                  }
+                  if (!data || data.event !== 'auth_result') {
+                    return null;
+                  }
+                  if (data.error) {
+                    return { error: data.error };
+                  }
+                  if (!data.result || typeof data.result !== 'string') {
+                    return { error: 'missing_id_token' };
+                  }
+                  return { id_token: data.result };
                 }
 
                 async function finalizeLogin(idToken) {
@@ -541,45 +626,68 @@ public class AuthController {
                   }
                 }
 
-                async function handleResult(result) {
-                  opening = false;
-                  if (!result) {
-                    setStatus('Telegram sign-in failed. Please try again.', 'error');
+                function handleMessage(event) {
+                  if (event.origin !== OIDC_ORIGIN) {
                     return;
                   }
+                  if (popup && event.source && event.source !== popup) {
+                    return;
+                  }
+                  var result = parseAuthResult(event.data);
+                  if (!result) {
+                    return;
+                  }
+                  cleanupPopup();
+                  opening = false;
                   if (result.error) {
                     if (result.error === 'popup_closed') {
                       setStatus('Login canceled. Tap the button to try again.', 'warn');
                       return;
                     }
+                    if (result.error === 'origin_required' || result.error === 'origin required') {
+                      setStatus('Telegram requires a valid website origin for this login flow.', 'error');
+                      return;
+                    }
                     setStatus('Telegram sign-in failed. Tap the button to try again.', 'error');
                     return;
                   }
-                  if (!result.id_token) {
-                    setStatus('Telegram did not return a valid token.', 'error');
-                    return;
-                  }
-                  await finalizeLogin(result.id_token);
+                  void finalizeLogin(result.id_token);
                 }
 
-                function beginLogin() {
+                function beginLogin(event) {
+                  if (event && typeof event.preventDefault === 'function') {
+                    event.preventDefault();
+                  }
                   if (opening) return;
                   opening = true;
                   setStatus('Opening Telegram...');
                   try {
-                    Telegram.Login.auth(
-                      {
-                        client_id: cfgEl.dataset.clientId,
-                        nonce: cfgEl.dataset.nonce
-                      },
-                      handleResult
-                    );
+                    cleanupPopup();
+                    var width = 550;
+                    var height = 650;
+                    var left = Math.max(0, (screen.width - width) / 2) + (screen.availLeft || 0);
+                    var top = Math.max(0, (screen.height - height) / 2) + (screen.availTop || 0);
+                    var features = 'width=' + width + ',height=' + height
+                      + ',left=' + left + ',top=' + top
+                      + ',status=0,location=0,menubar=0,toolbar=0';
+                    popup = window.open(buildAuthUrl(), 'telegram_oidc_login', features);
+                    if (!popup) {
+                      opening = false;
+                      setStatus('Unable to open Telegram login. Please allow popups and try again.', 'error');
+                      return;
+                    }
+                    try {
+                      popup.focus();
+                    } catch (e) {
+                    }
+                    startClosePolling();
                   } catch (e) {
                     opening = false;
                     setStatus('Unable to open Telegram login. Please tap again.', 'error');
                   }
                 }
 
+                window.addEventListener('message', handleMessage);
                 button.addEventListener('click', beginLogin);
                 window.addEventListener('load', function () {
                   setTimeout(beginLogin, 200);
