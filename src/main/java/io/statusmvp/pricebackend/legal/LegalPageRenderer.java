@@ -239,6 +239,94 @@ public final class LegalPageRenderer {
             address);
   }
 
+  public static String renderSupportHtml(LegalProperties properties) {
+    String appName = escapeHtml(nonEmpty(properties.getAppName(), "Veil Wallet"));
+    String entityName = escapeHtml(nonEmpty(properties.getEntityName(), "VeilLabs"));
+    String email = escapeHtml(nonEmpty(properties.getContactEmail(), "veillabs.wallet@gmail.com"));
+    String address = escapeHtml(nonEmpty(properties.getContactAddress(), "香港九龙区"));
+
+    return """
+        <!doctype html>
+        <html lang="zh-CN">
+          <head>
+            <meta charset="utf-8" />
+            <meta name="viewport" content="width=device-width, initial-scale=1" />
+            <title>%s Support</title>
+            <style>
+              body { margin: 0; background: #f7f8fa; color: #111827; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; line-height: 1.65; }
+              main { max-width: 920px; margin: 0 auto; padding: 24px 16px 40px; }
+              h1 { font-size: 28px; margin: 0 0 8px; }
+              h2 { font-size: 20px; margin: 24px 0 8px; }
+              p, li { font-size: 15px; }
+              .meta { color: #4b5563; font-size: 14px; margin-bottom: 20px; }
+              section { background: #fff; border-radius: 12px; padding: 16px; margin-bottom: 12px; box-shadow: 0 1px 2px rgba(0,0,0,.04); }
+              ul { margin: 6px 0 0 20px; padding: 0; }
+              a { color: #2563eb; }
+              code { background: #f3f4f6; padding: 2px 4px; border-radius: 4px; }
+            </style>
+          </head>
+          <body>
+            <main>
+              <h1>%s Support</h1>
+              <p class="meta">Support page for App Store review and end users</p>
+              <section>
+                <p>%s is a self-custodial Web3 wallet provided by %s.</p>
+                <p>该页面用于提供 %s 的基础支持信息、常见问题和审核联络方式。</p>
+              </section>
+              <section>
+                <h2>Contact</h2>
+                <ul>
+                  <li>Entity: %s</li>
+                  <li>Email: <a href="mailto:%s">%s</a></li>
+                  <li>Address: %s</li>
+                </ul>
+              </section>
+              <section>
+                <h2>Main Features</h2>
+                <ul>
+                  <li>Self-custodial wallet creation/import, send, receive, and transaction history</li>
+                  <li>EVM support: Ethereum, BNB Smart Chain, Optimism, Arbitrum, Base</li>
+                  <li>Additional network support: Tron and Solana</li>
+                  <li>VeilDEX swap, Across-based bridge flows, DApp browser, and WalletConnect v2</li>
+                  <li>Optional social login, chat, and Safe multisig collaboration features</li>
+                </ul>
+              </section>
+              <section>
+                <h2>Common Support Topics</h2>
+                <ul>
+                  <li>Wallet recovery: Only your recovery phrase/private key can restore a self-custodial wallet.</li>
+                  <li>Pending blockchain transactions: Confirmation time depends on the target network.</li>
+                  <li>Swap/bridge failures: Retry with a fresh quote and confirm gas, approval, slippage, and network status.</li>
+                  <li>DApp permissions: You can review and revoke site permissions inside the app.</li>
+                </ul>
+              </section>
+              <section>
+                <h2>Useful Links</h2>
+                <ul>
+                  <li>Privacy Policy: <a href="/privacy">/privacy</a></li>
+                  <li>Terms of Service: <a href="/terms">/terms</a></li>
+                </ul>
+              </section>
+              <section>
+                <h2>For App Review</h2>
+                <p>If additional review guidance is needed, contact us by email and mention <code>VeilWallet iOS review</code> in the subject line.</p>
+              </section>
+            </main>
+          </body>
+        </html>
+        """
+        .formatted(
+            appName,
+            appName,
+            appName,
+            entityName,
+            appName,
+            entityName,
+            email,
+            email,
+            address);
+  }
+
   private static String nonEmpty(String value, String fallback) {
     if (value == null) return fallback;
     String trimmed = value.trim();

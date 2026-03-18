@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 public class LegalProperties {
   private String termsUrl = "";
   private String privacyUrl = "";
+  private String supportUrl = "";
   private String appName = "Veil Wallet";
   private String entityName = "VeilLabs";
   private String contactEmail = "veillabs.wallet@gmail.com";
@@ -34,6 +35,14 @@ public class LegalProperties {
 
   public String getAppName() {
     return appName;
+  }
+
+  public String getSupportUrl() {
+    return supportUrl;
+  }
+
+  public void setSupportUrl(String supportUrl) {
+    this.supportUrl = supportUrl;
   }
 
   public void setAppName(String appName) {
