@@ -2,7 +2,8 @@ package io.statusmvp.pricebackend.auth;
 
 public enum AuthProvider {
   X("x"),
-  TG("tg");
+  TG("tg"),
+  APPLE("apple");
 
   private final String code;
 
@@ -22,4 +23,3 @@ public enum AuthProvider {
     throw new IllegalArgumentException("unsupported provider: " + value);
   }
 }
-

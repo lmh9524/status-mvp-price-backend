@@ -27,6 +27,8 @@ public final class AuthDtos {
       String code,
       long expiresInSeconds) {}
 
+  public record AppleLoginRequest(@NotBlank String identityToken, @NotBlank String nonce) {}
+
   public record ExchangeRequest(@NotBlank String code, String nonce) {}
 
   public record ExchangeResponse(

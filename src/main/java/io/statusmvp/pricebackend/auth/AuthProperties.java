@@ -19,6 +19,7 @@ public class AuthProperties {
   private String siweStatement = "VeilWallet wants you to sign in.";
   private boolean xEnabled = true;
   private boolean tgEnabled = true;
+  private boolean appleEnabled = true;
   private boolean syncEnabled = true;
   private boolean bindEnabled = true;
   private boolean metricsEnabled = true;
@@ -29,6 +30,7 @@ public class AuthProperties {
   private AppJwt appJwt = new AppJwt();
   private X x = new X();
   private Tg tg = new Tg();
+  private Apple apple = new Apple();
   private Risk risk = new Risk();
 
   public boolean isEnabled() {
@@ -111,6 +113,14 @@ public class AuthProperties {
     this.tgEnabled = tgEnabled;
   }
 
+  public boolean isAppleEnabled() {
+    return appleEnabled;
+  }
+
+  public void setAppleEnabled(boolean appleEnabled) {
+    this.appleEnabled = appleEnabled;
+  }
+
   public boolean isSyncEnabled() {
     return syncEnabled;
   }
@@ -181,6 +191,14 @@ public class AuthProperties {
 
   public void setTg(Tg tg) {
     this.tg = tg;
+  }
+
+  public Apple getApple() {
+    return apple;
+  }
+
+  public void setApple(Apple apple) {
+    this.apple = apple;
   }
 
   public Risk getRisk() {
@@ -518,6 +536,40 @@ public class AuthProperties {
         return "";
       }
       return prefix;
+    }
+  }
+
+  public static class Apple {
+    private String audiences = "com.veilwallet.app";
+    private String issuer = "https://appleid.apple.com";
+    private String jwksUri = "https://appleid.apple.com/auth/keys";
+
+    public String getAudiences() {
+      return audiences;
+    }
+
+    public void setAudiences(String audiences) {
+      this.audiences = audiences;
+    }
+
+    public String getIssuer() {
+      return issuer;
+    }
+
+    public void setIssuer(String issuer) {
+      this.issuer = issuer;
+    }
+
+    public String getJwksUri() {
+      return jwksUri;
+    }
+
+    public void setJwksUri(String jwksUri) {
+      this.jwksUri = jwksUri;
+    }
+
+    public List<String> audienceList() {
+      return AuthProperties.splitCsv(audiences.replace(" ", ","));
     }
   }
 

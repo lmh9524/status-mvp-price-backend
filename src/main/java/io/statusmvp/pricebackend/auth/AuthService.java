@@ -39,6 +39,7 @@ public class AuthService {
   private final AuthRedisStore store;
   private final XOAuthClient xOAuthClient;
   private final TelegramOidcClient telegramOidcClient;
+  private final AppleIdentityTokenClient appleIdentityTokenClient;
   private final TelegramVerifier telegramVerifier;
   private final AuthRiskService riskService;
   private final AuthJwtService jwtService;
@@ -50,6 +51,7 @@ public class AuthService {
       AuthRedisStore store,
       XOAuthClient xOAuthClient,
       TelegramOidcClient telegramOidcClient,
+      AppleIdentityTokenClient appleIdentityTokenClient,
       TelegramVerifier telegramVerifier,
       AuthRiskService riskService,
       AuthJwtService jwtService,
@@ -59,6 +61,7 @@ public class AuthService {
     this.store = store;
     this.xOAuthClient = xOAuthClient;
     this.telegramOidcClient = telegramOidcClient;
+    this.appleIdentityTokenClient = appleIdentityTokenClient;
     this.telegramVerifier = telegramVerifier;
     this.riskService = riskService;
     this.jwtService = jwtService;
@@ -516,6 +519,35 @@ public class AuthService {
     metrics.loginSuccess("tg");
     return new AuthDtos.AuthCodeResponse(
         AuthProvider.TG.code(),
+        providerUserId,
+        providerSub,
+        authCode.code(),
+        authProperties.getOneTimeCodeTtlSeconds());
+  }
+
+  public AuthDtos.AuthCodeResponse appleLogin(AuthDtos.AppleLoginRequest request, String ip, String deviceId) {
+    ensureAuthEnabled();
+    ensureAppleEnabled();
+    validateAppleLoginConfig();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    AppleIdentityTokenClient.ValidatedIdentity identity =
+        appleIdentityTokenClient.validateIdentityToken(request.identityToken(), request.nonce());
+    String providerUserId = identity.providerUserId();
+    String providerSub = AuthUtils.providerSub(AuthProvider.APPLE, providerUserId);
+    riskService.checkProviderAllowed(providerSub);
+
+    AuthCodeRecord authCode =
+        issueAuthCode(AuthProvider.APPLE, providerUserId, providerSub, emptyToNull(deviceId));
+    log.info(
+        "apple login verified: providerSub={}, emailPresent={}, deviceBound={}",
+        providerSub,
+        StringUtils.hasText(identity.email()),
+        StringUtils.hasText(deviceId));
+    metrics.loginSuccess("apple");
+    return new AuthDtos.AuthCodeResponse(
+        AuthProvider.APPLE.code(),
         providerUserId,
         providerSub,
         authCode.code(),
@@ -1251,6 +1283,12 @@ public class AuthService {
     }
   }
 
+  private void ensureAppleEnabled() {
+    if (!authProperties.isAppleEnabled()) {
+      throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "apple login disabled", 403);
+    }
+  }
+
   private void ensureTgLegacyWidgetEnabled() {
     if (!authProperties.getTg().isLegacyWidgetEnabled()) {
       throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "telegram legacy widget disabled", 403);
@@ -1263,6 +1301,15 @@ public class AuthService {
         || !StringUtils.hasText(tg.getJwksUri())
         || !StringUtils.hasText(tg.getIssuer())) {
       throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "telegram login not configured", 503);
+    }
+  }
+
+  private void validateAppleLoginConfig() {
+    AuthProperties.Apple apple = authProperties.getApple();
+    if (apple.audienceList().isEmpty()
+        || !StringUtils.hasText(apple.getJwksUri())
+        || !StringUtils.hasText(apple.getIssuer())) {
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "apple login not configured", 503);
     }
   }
 

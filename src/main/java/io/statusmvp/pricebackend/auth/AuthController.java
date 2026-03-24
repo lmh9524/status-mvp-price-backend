@@ -269,6 +269,16 @@ public class AuthController {
         .subscribeOn(Schedulers.boundedElastic());
   }
 
+  @PostMapping(path = "/api/v1/auth/apple/login", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.AuthCodeResponse> appleLogin(
+      @Valid @RequestBody AuthDtos.AppleLoginRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> authService.appleLogin(request, resolveClientIp(exchange), deviceId))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
   @PostMapping(path = "/api/v1/auth/tg/login/complete", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.RedirectResponse> telegramLoginComplete(
       @Valid @RequestBody AuthDtos.TelegramOidcCompleteRequest request,

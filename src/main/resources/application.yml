@@ -24,6 +24,7 @@ app:
     siweStatement: ${AUTH_SIWE_STATEMENT:VeilWallet wants you to sign in.}
     xEnabled: ${AUTH_X_ENABLED:true}
     tgEnabled: ${AUTH_TG_ENABLED:true}
+    appleEnabled: ${AUTH_APPLE_ENABLED:true}
     syncEnabled: ${AUTH_SYNC_ENABLED:true}
     bindEnabled: ${AUTH_BIND_ENABLED:true}
     metricsEnabled: ${AUTH_METRICS_ENABLED:true}
@@ -67,6 +68,10 @@ app:
       botUsername: ${AUTH_TG_BOT_USERNAME:}
       authMaxAgeSeconds: ${AUTH_TG_AUTH_MAX_AGE_SECONDS:600}
       legacyWidgetEnabled: ${AUTH_TG_LEGACY_WIDGET_ENABLED:false}
+    apple:
+      audiences: ${AUTH_APPLE_AUDIENCES:com.veilwallet.app}
+      issuer: ${AUTH_APPLE_ISSUER:https://appleid.apple.com}
+      jwksUri: ${AUTH_APPLE_JWKS_URI:https://appleid.apple.com/auth/keys}
     risk:
       blacklistIps: ${AUTH_RISK_BLACKLIST_IPS:}
       blacklistProviderSubs: ${AUTH_RISK_BLACKLIST_PROVIDER_SUBS:}
