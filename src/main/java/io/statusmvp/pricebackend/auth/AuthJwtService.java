@@ -64,7 +64,10 @@ public class AuthJwtService {
                   .build(),
               new JWTClaimsSet.Builder()
                   .issuer(authProperties.getWeb3auth().getIssuer())
-                  .audience(authProperties.getWeb3auth().getAudience())
+                  // Web3Auth dashboard validations often treat `aud` as a scalar string.
+                  // Nimbus defaults to emitting `aud` as a JSON array when using `.audience(...)`.
+                  // Emit it as a string for maximum compatibility.
+                  .claim("aud", authProperties.getWeb3auth().getAudience())
                   .subject(providerSub)
                   .issueTime(Date.from(now))
                   .expirationTime(Date.from(now.plusSeconds(Math.max(30, ttlSeconds))))
@@ -120,6 +123,10 @@ public class AuthJwtService {
       if (expires == null || expires.before(new Date())) {
         throw new AuthException(AuthErrorCode.ACCESS_TOKEN_EXPIRED, "access token expired", 401);
       }
+      Date issuedAt = claims.getIssueTime();
+      if (issuedAt == null) {
+        throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "invalid access token", 401);
+      }
       String subject = claims.getSubject();
       if (subject == null || subject.isBlank()) {
         throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "invalid access token", 401);
@@ -129,7 +136,11 @@ public class AuthJwtService {
         throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "invalid access token type", 401);
       }
       String jti = claims.getJWTID();
-      return new AccessTokenClaims(subject, jti, expires.toInstant().getEpochSecond());
+      return new AccessTokenClaims(
+          subject,
+          jti,
+          issuedAt.toInstant().toEpochMilli(),
+          expires.toInstant().toEpochMilli());
     } catch (AuthException e) {
       throw e;
     } catch (Exception e) {
@@ -272,5 +283,5 @@ public class AuthJwtService {
     return out.toByteArray();
   }
 
-  public record AccessTokenClaims(String walletSub, String jti, long expEpochSeconds) {}
+  public record AccessTokenClaims(String walletSub, String jti, long issuedAtEpochMs, long expEpochMs) {}
 }

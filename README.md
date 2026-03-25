@@ -22,15 +22,19 @@ Optional:
 - `GET /api/v1/bridge/across/directory` (Across supported chains/routes proxy + allowlist downlink)
 - `GET /health`
 
-### Auth endpoints (M1: X/Telegram + Web3Auth Custom JWT)
+### Auth endpoints (M1: X/Telegram/Apple + Web3Auth Custom JWT)
 
 - `GET /.well-known/jwks.json`
 - `GET /api/v1/auth/x/start`
 - `GET /api/v1/auth/x/callback`
+- `GET /api/v1/auth/tg/start`
+- `GET /api/v1/auth/tg/callback`
 - `POST /api/v1/auth/tg/login`
+- `POST /api/v1/auth/apple/login`
 - `POST /api/v1/auth/exchange`
 - `POST /api/v1/auth/refresh`
 - `GET /api/v1/auth/me`
+- `POST /api/v1/auth/account/delete`
 - `POST /api/v1/auth/providers/bind`
 - `POST /api/v1/auth/providers/unbind`
 - `GET /api/v1/auth/sync/dapps`
@@ -135,5 +139,3 @@ Environment variables (see `env.example`):
 - `BRIDGE_ACROSS_ALLOWED_CHAIN_IDS` (comma-separated EIP-155 chainIds)
 - `BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS` (comma-separated symbols as returned by Across APIs)
 - `BRIDGE_ACROSS_CHAINS_CACHE_TTL_SECONDS`, `BRIDGE_ACROSS_ROUTES_CACHE_TTL_SECONDS`
-
-

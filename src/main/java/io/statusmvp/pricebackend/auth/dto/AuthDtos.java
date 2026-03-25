@@ -12,7 +12,13 @@ import java.util.List;
 public final class AuthDtos {
   private AuthDtos() {}
 
+  public record OAuthStartResponse(String authorizeUrl, String state, long expiresInSeconds) {}
+
   public record XStartResponse(String authorizeUrl, String state, long expiresInSeconds) {}
+
+  public record RedirectResponse(String redirectUrl) {}
+
+  public record XResumeRequest(@NotBlank String resumeToken) {}
 
   public record AuthCodeResponse(
       String provider,
@@ -20,6 +26,8 @@ public final class AuthDtos {
       String providerSub,
       String code,
       long expiresInSeconds) {}
+
+  public record AppleLoginRequest(@NotBlank String identityToken, @NotBlank String nonce) {}
 
   public record ExchangeRequest(@NotBlank String code, String nonce) {}
 
@@ -44,6 +52,10 @@ public final class AuthDtos {
 
   public record MeResponse(String walletSub, List<ProviderBinding> providers) {}
 
+  public record DeleteAccountRequest(String refreshToken) {}
+
+  public record DeleteAccountResponse(String walletSub, int removedProviders, boolean refreshTokenRevoked) {}
+
   public record BindRequest(@NotBlank String authCode) {}
 
   public record UnbindRequest(@NotBlank String providerSub) {}
@@ -62,6 +74,37 @@ public final class AuthDtos {
       @NotBlank String hash,
       @JsonAlias("app_redirect_uri")
       String appRedirectUri) {}
+
+  public record TelegramOidcCompleteRequest(
+      @NotBlank String state,
+      @JsonAlias("id_token")
+      @NotBlank String idToken) {}
+
+  public record Web3authJwtResponse(
+      String provider,
+      String providerUserId,
+      String providerSub,
+      String web3authJwt) {}
+
+  public record SiweNonceRequest(@NotBlank String address) {}
+
+  public record SiweNonceResponse(
+      String nonce,
+      String domain,
+      String uri,
+      String statement,
+      long chainId,
+      String issuedAt,
+      String expirationTime) {}
+
+  public record SiweVerifyRequest(@NotBlank String message, @NotBlank String signature) {}
+
+  public record SiweVerifyResponse(
+      String walletSub,
+      String accessToken,
+      String refreshToken,
+      long accessTokenExpiresInSeconds,
+      long refreshTokenExpiresInSeconds) {}
 
   public record SyncPayloadInput(
       List<FavoriteItem> favorites, Long favoritesUpdatedAt, List<HistoryItem> history, Long historyUpdatedAt) {}

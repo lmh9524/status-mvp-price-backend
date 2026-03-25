@@ -7,9 +7,12 @@ import io.statusmvp.pricebackend.auth.model.HistoryItem;
 import io.statusmvp.pricebackend.auth.model.OAuthStateRecord;
 import io.statusmvp.pricebackend.auth.model.ProviderBinding;
 import io.statusmvp.pricebackend.auth.model.RefreshTokenRecord;
+import io.statusmvp.pricebackend.auth.model.SiweNonceRecord;
 import io.statusmvp.pricebackend.auth.model.SyncFavorites;
 import io.statusmvp.pricebackend.auth.model.SyncHistory;
 import io.statusmvp.pricebackend.auth.model.WalletProfile;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.net.URI;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Comparator;
@@ -35,51 +38,287 @@ public class AuthService {
   private final AuthProperties authProperties;
   private final AuthRedisStore store;
   private final XOAuthClient xOAuthClient;
+  private final TelegramOidcClient telegramOidcClient;
+  private final AppleIdentityTokenClient appleIdentityTokenClient;
   private final TelegramVerifier telegramVerifier;
   private final AuthRiskService riskService;
   private final AuthJwtService jwtService;
   private final AuthMetrics metrics;
+  private final ObjectMapper objectMapper;
 
   public AuthService(
       AuthProperties authProperties,
       AuthRedisStore store,
       XOAuthClient xOAuthClient,
+      TelegramOidcClient telegramOidcClient,
+      AppleIdentityTokenClient appleIdentityTokenClient,
       TelegramVerifier telegramVerifier,
       AuthRiskService riskService,
       AuthJwtService jwtService,
-      AuthMetrics metrics) {
+      AuthMetrics metrics,
+      ObjectMapper objectMapper) {
     this.authProperties = authProperties;
     this.store = store;
     this.xOAuthClient = xOAuthClient;
+    this.telegramOidcClient = telegramOidcClient;
+    this.appleIdentityTokenClient = appleIdentityTokenClient;
     this.telegramVerifier = telegramVerifier;
     this.riskService = riskService;
     this.jwtService = jwtService;
     this.metrics = metrics;
+    this.objectMapper = objectMapper;
   }
 
-  public AuthDtos.XStartResponse startXLogin(String appRedirectUri) {
+  public AuthDtos.XStartResponse startXLogin(String appRedirectUri, String deviceId) {
     ensureAuthEnabled();
     ensureXEnabled();
     validateXConfig();
     validateAppRedirect(appRedirectUri);
 
-    String state = AuthUtils.randomBase64Url(24);
-    String codeVerifier = AuthUtils.randomBase64Url(48);
-    String codeChallenge = AuthUtils.sha256Base64Url(codeVerifier);
-    long now = now();
-    OAuthStateRecord stateRecord =
-        new OAuthStateRecord(
-            state,
-            AuthProvider.X.code(),
-            codeVerifier,
-            emptyToNull(appRedirectUri),
-            now,
-            now + authProperties.getOauthStateTtlSeconds() * 1000);
-    store.putOAuthState(stateRecord, authProperties.getOauthStateTtlSeconds());
+    String state;
+    String codeVerifier;
+    String codeChallenge;
+
+    String stateSecret = authProperties.getX().getStateSecret();
+    if (StringUtils.hasText(stateSecret)) {
+      XOAuthStateTokens.Issued issued =
+          XOAuthStateTokens.issue(
+              objectMapper,
+              stateSecret,
+              emptyToNull(appRedirectUri),
+              authProperties.getOauthStateTtlSeconds(),
+              now());
+      state = issued.state();
+      codeVerifier = issued.codeVerifier();
+      codeChallenge = AuthUtils.sha256Base64Url(codeVerifier);
+    } else {
+      state = AuthUtils.randomBase64Url(24);
+      codeVerifier = AuthUtils.randomBase64Url(48);
+      codeChallenge = AuthUtils.sha256Base64Url(codeVerifier);
+      long now = now();
+      OAuthStateRecord stateRecord =
+          new OAuthStateRecord(
+              state,
+              AuthProvider.X.code(),
+              codeVerifier,
+              emptyToNull(appRedirectUri),
+              now,
+              now + authProperties.getOauthStateTtlSeconds() * 1000);
+      store.putOAuthState(stateRecord, authProperties.getOauthStateTtlSeconds());
+    }
+
+    store.putOAuthStateDevice(state, deviceId, authProperties.getOauthStateTtlSeconds());
     return new AuthDtos.XStartResponse(
-        xOAuthClient.buildAuthorizeUrl(state, codeChallenge),
+        xOAuthClient.buildAuthorizeUrl(state, codeChallenge), state,
+        authProperties.getOauthStateTtlSeconds());
+  }
+
+  public AuthDtos.OAuthStartResponse startTelegramLogin(
+      String appRedirectUri, String deviceId, String externalBaseUrl) {
+    ensureAuthEnabled();
+    ensureTgEnabled();
+    ensureTgLegacyWidgetEnabled();
+    validateAppRedirect(appRedirectUri);
+    String baseUrl = requireExternalBaseUrl(externalBaseUrl);
+
+    String state;
+    String loginNonce;
+
+    String stateSecret = authProperties.getTg().getStateSecret();
+    if (StringUtils.hasText(stateSecret)) {
+      TelegramOidcStateTokens.Issued issued =
+          TelegramOidcStateTokens.issue(
+              objectMapper,
+              stateSecret,
+              emptyToNull(appRedirectUri),
+              authProperties.getOauthStateTtlSeconds(),
+              now());
+      state = issued.state();
+      loginNonce = issued.codeVerifier();
+    } else {
+      state = AuthUtils.randomBase64Url(24);
+      loginNonce = AuthUtils.randomBase64Url(48);
+      long now = now();
+      OAuthStateRecord stateRecord =
+          new OAuthStateRecord(
+              state,
+              AuthProvider.TG.code(),
+              loginNonce,
+              emptyToNull(appRedirectUri),
+              now,
+              now + authProperties.getOauthStateTtlSeconds() * 1000);
+      store.putOAuthState(stateRecord, authProperties.getOauthStateTtlSeconds());
+    }
+
+    store.putOAuthStateDevice(state, deviceId, authProperties.getOauthStateTtlSeconds());
+    String authorizeUrl =
+        UriComponentsBuilder.fromHttpUrl(baseUrl)
+            .path("/api/v1/auth/tg/widget")
+            .queryParam("appRedirectUri", appRedirectUri)
+            .queryParam("state", state)
+            .build(true)
+            .toUriString();
+    return new AuthDtos.OAuthStartResponse(
+        authorizeUrl,
         state,
         authProperties.getOauthStateTtlSeconds());
+  }
+
+  public TelegramWidgetStartContext consumeTelegramWidgetStartContext(
+      String state, String deviceId, String appRedirectUri) {
+    ensureAuthEnabled();
+    ensureTgEnabled();
+    ensureTgLegacyWidgetEnabled();
+    ResolvedTelegramLoginState resolved = consumeTelegramLoginState(state, deviceId);
+    if (!StringUtils.hasText(appRedirectUri)) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "telegram widget redirect missing", 400);
+    }
+    validateAppRedirect(appRedirectUri);
+    if (!appRedirectUri.equals(resolved.appRedirectUri())) {
+      throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+    }
+    return new TelegramWidgetStartContext(resolved.appRedirectUri(), resolved.deviceId());
+  }
+
+  public void validateAppRedirectUri(String appRedirectUri) {
+    validateAppRedirect(appRedirectUri);
+  }
+
+  public void validateTgWidgetRequest(String appRedirectUri) {
+    ensureAuthEnabled();
+    ensureTgEnabled();
+    ensureTgLegacyWidgetEnabled();
+    validateAppRedirect(appRedirectUri);
+  }
+
+  public String telegramBotUsername() {
+    return emptyToNull(authProperties.getTg().getBotUsername());
+  }
+
+  public String telegramLoginClientId() {
+    return telegramOidcClient.resolveClientId();
+  }
+
+  public XCallbackResult handleTelegramCallback(
+      String code,
+      String state,
+      String error,
+      String errorDescription,
+      String ip,
+      String deviceId) {
+    ensureAuthEnabled();
+    ensureTgEnabled();
+    validateTelegramOidcCodeFlowConfig();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    String appRedirectUri;
+    String codeVerifier;
+    String effectiveDeviceId = emptyToNull(deviceId);
+
+    String stateSecret = authProperties.getTg().getStateSecret();
+    if (StringUtils.hasText(stateSecret) && TelegramOidcStateTokens.looksLikeToken(state)) {
+      TelegramOidcStateTokens.Parsed parsed =
+          TelegramOidcStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
+      if (parsed == null) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+      }
+      appRedirectUri = parsed.appRedirectUri();
+      codeVerifier = parsed.codeVerifier();
+      if (parsed.expiresAtMs() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      validateAppRedirect(appRedirectUri);
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    } else {
+      OAuthStateRecord stateRecord =
+          store
+              .consumeOAuthState(state)
+              .orElseThrow(
+                  () ->
+                      new AuthException(
+                          AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401));
+      if (stateRecord.expiresAt() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      appRedirectUri = stateRecord.appRedirectUri();
+      codeVerifier = stateRecord.codeVerifier();
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    }
+
+    if (!StringUtils.hasText(deviceId) && StringUtils.hasText(effectiveDeviceId)) {
+      riskService.checkLoginDeviceRateLimit(effectiveDeviceId);
+    }
+    if (StringUtils.hasText(error)) {
+      metrics.loginFailure("tg", "oauth_error");
+      throw new AuthException(
+          AuthErrorCode.OAUTH_EXCHANGE_FAILED,
+          "telegram oauth failed: " + (errorDescription == null ? error : errorDescription),
+          401);
+    }
+    if (!StringUtils.hasText(code)) {
+      metrics.loginFailure("tg", "missing_code");
+      throw new AuthException(AuthErrorCode.OAUTH_EXCHANGE_FAILED, "telegram oauth code missing", 400);
+    }
+
+    String providerUserId = telegramOidcClient.exchangeCodeForProviderUserId(code, codeVerifier);
+    String providerSub = AuthUtils.providerSub(AuthProvider.TG, providerUserId);
+    riskService.checkProviderAllowed(providerSub);
+
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub, effectiveDeviceId);
+    metrics.loginSuccess("tg");
+    return new XCallbackResult(
+        new AuthDtos.AuthCodeResponse(
+            AuthProvider.TG.code(),
+            providerUserId,
+            providerSub,
+            authCode.code(),
+            authProperties.getOneTimeCodeTtlSeconds()),
+        appRedirectUri,
+        state);
+  }
+
+  public XCallbackResult completeTelegramLogin(
+      String state,
+      String idToken,
+      String ip,
+      String deviceId) {
+    ensureAuthEnabled();
+    ensureTgEnabled();
+    validateTelegramLoginLibraryConfig();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    ResolvedTelegramLoginState resolved = consumeTelegramLoginState(state, deviceId);
+    if (!StringUtils.hasText(deviceId) && StringUtils.hasText(resolved.deviceId())) {
+      riskService.checkLoginDeviceRateLimit(resolved.deviceId());
+    }
+    if (!StringUtils.hasText(idToken)) {
+      metrics.loginFailure("tg", "missing_id_token");
+      throw new AuthException(AuthErrorCode.UNAUTHORIZED, "telegram id token missing", 401);
+    }
+
+    TelegramOidcClient.ValidatedIdentity identity =
+        telegramOidcClient.validateIdToken(idToken, resolved.nonce());
+    String providerUserId = identity.providerUserId();
+    String providerSub = AuthUtils.providerSub(AuthProvider.TG, providerUserId);
+    riskService.checkProviderAllowed(providerSub);
+
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub, resolved.deviceId());
+    metrics.loginSuccess("tg");
+    return new XCallbackResult(
+        new AuthDtos.AuthCodeResponse(
+            AuthProvider.TG.code(),
+            providerUserId,
+            providerSub,
+            authCode.code(),
+            authProperties.getOneTimeCodeTtlSeconds()),
+        resolved.appRedirectUri(),
+        state);
   }
 
   public XCallbackResult handleXCallback(
@@ -95,12 +334,45 @@ public class AuthService {
     riskService.checkIpAllowed(ip);
     riskService.checkLoginRateLimits(ip, deviceId);
 
-    OAuthStateRecord stateRecord =
-        store
-            .consumeOAuthState(state)
-            .orElseThrow(() -> new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401));
-    if (stateRecord.expiresAt() < now()) {
-      throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+    String appRedirectUri;
+    String codeVerifier;
+    String effectiveDeviceId = emptyToNull(deviceId);
+
+    String stateSecret = authProperties.getX().getStateSecret();
+    if (StringUtils.hasText(stateSecret) && XOAuthStateTokens.looksLikeToken(state)) {
+      XOAuthStateTokens.Parsed parsed =
+          XOAuthStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
+      if (parsed == null) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+      }
+      appRedirectUri = parsed.appRedirectUri();
+      codeVerifier = parsed.codeVerifier();
+      if (parsed.expiresAtMs() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      validateAppRedirect(appRedirectUri);
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    } else {
+      OAuthStateRecord stateRecord =
+          store
+              .consumeOAuthState(state)
+              .orElseThrow(
+                  () ->
+                      new AuthException(
+                          AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401));
+      if (stateRecord.expiresAt() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      appRedirectUri = stateRecord.appRedirectUri();
+      codeVerifier = stateRecord.codeVerifier();
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    }
+    if (!StringUtils.hasText(deviceId) && StringUtils.hasText(effectiveDeviceId)) {
+      riskService.checkLoginDeviceRateLimit(effectiveDeviceId);
     }
     if (StringUtils.hasText(error)) {
       metrics.loginFailure("x", "oauth_error");
@@ -114,12 +386,43 @@ public class AuthService {
       throw new AuthException(AuthErrorCode.OAUTH_EXCHANGE_FAILED, "x oauth code missing", 400);
     }
 
-    String accessToken = xOAuthClient.exchangeCodeForAccessToken(code, stateRecord.codeVerifier());
-    String providerUserId = xOAuthClient.fetchUserId(accessToken);
+    XOAuthClient.TokenExchangeResult tokens = xOAuthClient.exchangeCodeForTokens(code, codeVerifier);
+    String accessToken = tokens.accessToken();
+
+    String providerUserId = xOAuthClient.tryExtractUserIdFromIdToken(tokens.idToken());
+    if (!StringUtils.hasText(providerUserId)) {
+      try {
+        providerUserId = xOAuthClient.fetchUserId(accessToken);
+      } catch (AuthException e) {
+        if (e.getCode() == AuthErrorCode.PROVIDER_UNAVAILABLE) {
+          // IMPORTANT: We must not mint an authCode with an unstable "provider user id" (e.g. refresh_token hash).
+          // Otherwise the same X account can map to different Web3Auth verifierIds across logins, producing different wallets.
+          //
+          // If X userinfo is temporarily unavailable, return a resumable error so the app can retry.
+          if (StringUtils.hasText(stateSecret) && StringUtils.hasText(effectiveDeviceId)) {
+            try {
+              String resumeToken =
+                  XOAuthResumeTokens.issue(objectMapper, stateSecret, effectiveDeviceId, accessToken, 600, now());
+              throw new AuthException(
+                  AuthErrorCode.PROVIDER_UNAVAILABLE,
+                  e.getMessage(),
+                  503,
+                  e.getRetryAfterSeconds() == null ? 3 : e.getRetryAfterSeconds(),
+                  Map.of(
+                      "resumeToken", resumeToken,
+                      "providerStatus", e.getDetails().getOrDefault("providerStatus", 0)));
+            } catch (Exception ignored) {
+              // fallthrough to original exception
+            }
+          }
+        }
+        if (!StringUtils.hasText(providerUserId)) throw e;
+      }
+    }
     String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
-    AuthCodeRecord authCode = issueAuthCode(AuthProvider.X, providerUserId, providerSub);
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.X, providerUserId, providerSub, effectiveDeviceId);
     metrics.loginSuccess("x");
     return new XCallbackResult(
         new AuthDtos.AuthCodeResponse(
@@ -128,13 +431,82 @@ public class AuthService {
             providerSub,
             authCode.code(),
             authProperties.getOneTimeCodeTtlSeconds()),
-        stateRecord.appRedirectUri());
+        appRedirectUri,
+        state);
+  }
+
+  public AuthDtos.AuthCodeResponse resumeXLogin(String resumeToken, String ip, String deviceId) {
+    ensureAuthEnabled();
+    ensureXEnabled();
+    validateXConfig();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    if (!StringUtils.hasText(deviceId)) {
+      throw new AuthException(AuthErrorCode.UNAUTHORIZED, "missing device id", 401);
+    }
+
+    String stateSecret = authProperties.getX().getStateSecret();
+    if (!StringUtils.hasText(stateSecret)) {
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x oauth not configured", 503);
+    }
+
+    XOAuthResumeTokens.Parsed parsed =
+        XOAuthResumeTokens.parseAndDecrypt(objectMapper, stateSecret, resumeToken, now());
+    if (parsed == null) {
+      throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth resume token invalid", 401);
+    }
+    if (parsed.deviceId() != null && !deviceId.trim().equals(parsed.deviceId().trim())) {
+      throw new AuthException(AuthErrorCode.UNAUTHORIZED, "invalid device id", 401);
+    }
+
+    // X userinfo may intermittently 503 from some regions. In resume flow (app->backend), we can afford
+    // a few short retries to improve UX without risking browser/proxy callback timeouts.
+    String providerUserId = null;
+    AuthException lastUnavailable = null;
+    long backoffMs = 350L;
+    final int maxAttempts = 5;
+    for (int attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        providerUserId = xOAuthClient.fetchUserId(parsed.accessToken());
+        break;
+      } catch (AuthException e) {
+        if (e.getCode() != AuthErrorCode.PROVIDER_UNAVAILABLE) {
+          throw e;
+        }
+        lastUnavailable = e;
+        if (attempt >= maxAttempts) break;
+        try {
+          Thread.sleep(backoffMs);
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          break;
+        }
+        backoffMs = Math.min(2_000L, backoffMs * 2);
+      }
+    }
+    if (!StringUtils.hasText(providerUserId)) {
+      if (lastUnavailable != null) throw lastUnavailable;
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "x provider unavailable", 503, 3, Map.of());
+    }
+    String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
+    riskService.checkProviderAllowed(providerSub);
+
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.X, providerUserId, providerSub, deviceId.trim());
+    metrics.loginSuccess("x");
+    return new AuthDtos.AuthCodeResponse(
+        AuthProvider.X.code(),
+        providerUserId,
+        providerSub,
+        authCode.code(),
+        authProperties.getOneTimeCodeTtlSeconds());
   }
 
   public AuthDtos.AuthCodeResponse telegramLogin(
       AuthDtos.TelegramLoginRequest request, String ip, String deviceId) {
     ensureAuthEnabled();
     ensureTgEnabled();
+    ensureTgLegacyWidgetEnabled();
     riskService.checkIpAllowed(ip);
     riskService.checkLoginRateLimits(ip, deviceId);
     validateAppRedirect(request.appRedirectUri());
@@ -143,7 +515,7 @@ public class AuthService {
     String providerSub = AuthUtils.providerSub(AuthProvider.TG, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
-    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub);
+    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub, emptyToNull(deviceId));
     metrics.loginSuccess("tg");
     return new AuthDtos.AuthCodeResponse(
         AuthProvider.TG.code(),
@@ -153,9 +525,38 @@ public class AuthService {
         authProperties.getOneTimeCodeTtlSeconds());
   }
 
-  public AuthDtos.ExchangeResponse exchange(AuthDtos.ExchangeRequest request) {
+  public AuthDtos.AuthCodeResponse appleLogin(AuthDtos.AppleLoginRequest request, String ip, String deviceId) {
     ensureAuthEnabled();
-    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code());
+    ensureAppleEnabled();
+    validateAppleLoginConfig();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    AppleIdentityTokenClient.ValidatedIdentity identity =
+        appleIdentityTokenClient.validateIdentityToken(request.identityToken(), request.nonce());
+    String providerUserId = identity.providerUserId();
+    String providerSub = AuthUtils.providerSub(AuthProvider.APPLE, providerUserId);
+    riskService.checkProviderAllowed(providerSub);
+
+    AuthCodeRecord authCode =
+        issueAuthCode(AuthProvider.APPLE, providerUserId, providerSub, emptyToNull(deviceId));
+    log.info(
+        "apple login verified: providerSub={}, emailPresent={}, deviceBound={}",
+        providerSub,
+        StringUtils.hasText(identity.email()),
+        StringUtils.hasText(deviceId));
+    metrics.loginSuccess("apple");
+    return new AuthDtos.AuthCodeResponse(
+        AuthProvider.APPLE.code(),
+        providerUserId,
+        providerSub,
+        authCode.code(),
+        authProperties.getOneTimeCodeTtlSeconds());
+  }
+
+  public AuthDtos.ExchangeResponse exchange(AuthDtos.ExchangeRequest request, String deviceId) {
+    ensureAuthEnabled();
+    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId);
     String providerSub = codeRecord.providerSub();
     String walletSub = resolveOrCreateWalletForProvider(codeRecord);
     String nonce = request.nonce();
@@ -183,6 +584,146 @@ public class AuthService {
         codeRecord.providerUserId(),
         codeRecord.providerSub(),
         web3authJwt,
+        accessToken,
+        refreshToken,
+        authProperties.getAccessTokenTtlSeconds(),
+        authProperties.getRefreshTokenTtlSeconds());
+  }
+
+  public AuthDtos.Web3authJwtResponse web3authJwt(AuthDtos.ExchangeRequest request, String deviceId) {
+    ensureAuthEnabled();
+    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId);
+    String providerSub = codeRecord.providerSub();
+    String nonce = request.nonce();
+    String web3authJwt =
+        jwtService.issueWeb3AuthJwt(providerSub, nonce, authProperties.getWeb3authJwtTtlSeconds());
+    return new AuthDtos.Web3authJwtResponse(
+        codeRecord.provider(), codeRecord.providerUserId(), providerSub, web3authJwt);
+  }
+
+  public AuthDtos.SiweNonceResponse siweNonce(
+      AuthDtos.SiweNonceRequest request, String ip, String deviceId, String externalBaseUrl) {
+    ensureAuthEnabled();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    String address = normalizeEvmAddressLower(request.address());
+    String baseUrl = emptyToNull(externalBaseUrl);
+    if (baseUrl == null) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "missing base url", 400);
+    }
+
+    URI parsed;
+    try {
+      parsed = URI.create(baseUrl);
+    } catch (Exception e) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "invalid base url", 400);
+    }
+    String domain = emptyToNull(parsed.getHost());
+    if (domain == null) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "invalid base url", 400);
+    }
+
+    long now = now();
+    long ttlSeconds = Math.max(60, authProperties.getSiweNonceTtlSeconds());
+    String nonce = AuthUtils.randomBase64Url(24);
+    long expiresAt = now + ttlSeconds * 1000;
+    store.putSiweNonce(
+        new SiweNonceRecord(nonce, address, domain.trim(), baseUrl, now, expiresAt), ttlSeconds);
+
+    Instant issuedAt = Instant.ofEpochMilli(now);
+    Instant expirationTime = Instant.ofEpochMilli(expiresAt);
+    return new AuthDtos.SiweNonceResponse(
+        nonce,
+        domain.trim(),
+        baseUrl,
+        authProperties.getSiweStatement(),
+        1,
+        issuedAt.toString(),
+        expirationTime.toString());
+  }
+
+  public AuthDtos.SiweVerifyResponse siweVerify(
+      AuthDtos.SiweVerifyRequest request, String ip, String deviceId) {
+    ensureAuthEnabled();
+    riskService.checkIpAllowed(ip);
+    riskService.checkLoginRateLimits(ip, deviceId);
+
+    SiweUtils.ParsedSiwe parsed;
+    try {
+      parsed = SiweUtils.parseMessage(request.message());
+    } catch (IllegalArgumentException e) {
+      metrics.loginFailure("siwe", "message_invalid");
+      throw new AuthException(AuthErrorCode.SIWE_MESSAGE_INVALID, "invalid siwe message", 400);
+    }
+
+    if (parsed.chainId() != 1) {
+      metrics.loginFailure("siwe", "chain_unsupported");
+      throw new AuthException(AuthErrorCode.SIWE_MESSAGE_INVALID, "unsupported chain", 400);
+    }
+
+    String address = normalizeEvmAddressLower(parsed.address());
+    String nonce = parsed.nonce().trim();
+    SiweNonceRecord record =
+        store
+            .consumeSiweNonce(nonce)
+            .orElseThrow(
+                () -> {
+                  metrics.loginFailure("siwe", "nonce_invalid");
+                  return new AuthException(AuthErrorCode.SIWE_NONCE_INVALID, "invalid nonce", 401);
+                });
+
+    long now = now();
+    if (record.expiresAt() < now) {
+      metrics.loginFailure("siwe", "nonce_expired");
+      throw new AuthException(AuthErrorCode.SIWE_NONCE_EXPIRED, "nonce expired", 401);
+    }
+    if (!Objects.equals(record.address(), address)) {
+      metrics.loginFailure("siwe", "nonce_mismatch");
+      throw new AuthException(AuthErrorCode.SIWE_NONCE_INVALID, "invalid nonce", 401);
+    }
+    if (!Objects.equals(record.domain(), parsed.domain()) || !Objects.equals(record.uri(), parsed.uri())) {
+      metrics.loginFailure("siwe", "domain_mismatch");
+      throw new AuthException(AuthErrorCode.SIWE_MESSAGE_INVALID, "invalid siwe message", 400);
+    }
+    if (parsed.expirationTime().toEpochMilli() < now) {
+      metrics.loginFailure("siwe", "message_expired");
+      throw new AuthException(AuthErrorCode.SIWE_NONCE_EXPIRED, "nonce expired", 401);
+    }
+
+    String recovered;
+    try {
+      recovered = SiweUtils.recoverAddress(request.message(), request.signature());
+    } catch (IllegalArgumentException e) {
+      metrics.loginFailure("siwe", "sig_invalid");
+      throw new AuthException(AuthErrorCode.SIWE_SIGNATURE_INVALID, "invalid signature", 401);
+    }
+    if (!Objects.equals(recovered, address)) {
+      metrics.loginFailure("siwe", "sig_mismatch");
+      throw new AuthException(AuthErrorCode.SIWE_SIGNATURE_INVALID, "invalid signature", 401);
+    }
+
+    // Ensure a wallet profile exists for sync storage etc.
+    getOrCreateWallet(address);
+
+    String accessToken = jwtService.issueAccessToken(address, authProperties.getAccessTokenTtlSeconds());
+    String refreshToken = AuthUtils.randomBase64Url(48);
+
+    String refreshHash = jwtService.sha256Hex(refreshToken);
+    RefreshTokenRecord refreshRecord =
+        new RefreshTokenRecord(
+            UUID.randomUUID().toString(),
+            address,
+            refreshHash,
+            now,
+            now + authProperties.getRefreshTokenTtlSeconds() * 1000,
+            null,
+            null);
+    store.putRefreshToken(refreshRecord, authProperties.getRefreshTokenTtlSeconds());
+
+    metrics.loginSuccess("siwe");
+    return new AuthDtos.SiweVerifyResponse(
+        address,
         accessToken,
         refreshToken,
         authProperties.getAccessTokenTtlSeconds(),
@@ -234,13 +775,60 @@ public class AuthService {
     return new AuthDtos.MeResponse(walletSub, providers);
   }
 
-  public AuthDtos.MeResponse bindProvider(String authorizationHeader, AuthDtos.BindRequest request) {
+  public AuthDtos.DeleteAccountResponse deleteAccount(
+      String authorizationHeader, AuthDtos.DeleteAccountRequest request) {
+    ensureAuthEnabled();
+    AuthJwtService.AccessTokenClaims claims = requireActiveAccessTokenClaims(authorizationHeader);
+    String walletSub = claims.walletSub();
+    long deletedAt = now();
+    long tombstoneTtlSeconds = Math.max(300, authProperties.getAccessTokenTtlSeconds() + 60L);
+    try {
+      WalletProfile profile = store.getWalletProfile(walletSub).orElse(null);
+      int removedProviders = 0;
+      if (profile != null) {
+        for (String providerSub : profile.providers().keySet()) {
+          if (!StringUtils.hasText(providerSub)) continue;
+          store.unbindProviderSub(providerSub);
+          removedProviders++;
+        }
+      }
+
+      String requestedRefreshToken = emptyToNull(request == null ? null : request.refreshToken());
+      boolean refreshTokenRevoked = false;
+      if (requestedRefreshToken != null) {
+        String tokenHash = jwtService.sha256Hex(requestedRefreshToken);
+        refreshTokenRevoked =
+            store.getRefreshTokenByHash(tokenHash).map(RefreshTokenRecord::walletSub).filter(walletSub::equals).isPresent();
+      }
+
+      store.markWalletDeleted(walletSub, deletedAt, tombstoneTtlSeconds);
+      int revokedRefreshTokens = store.revokeAllRefreshTokensForWallet(walletSub);
+      store.deleteWalletProfile(walletSub);
+
+      log.info(
+          "account deleted: walletSub={}, removedProviders={}, revokedRefreshTokens={}, refreshTokenRevoked={}",
+          walletSub,
+          removedProviders,
+          revokedRefreshTokens,
+          refreshTokenRevoked);
+      metrics.deleteSuccess();
+      return new AuthDtos.DeleteAccountResponse(walletSub, removedProviders, refreshTokenRevoked);
+    } catch (AuthException e) {
+      metrics.deleteFailure(e.getCode().name());
+      throw e;
+    } catch (RuntimeException e) {
+      metrics.deleteFailure("unknown");
+      throw e;
+    }
+  }
+
+  public AuthDtos.MeResponse bindProvider(String authorizationHeader, AuthDtos.BindRequest request, String deviceId) {
     ensureAuthEnabled();
     ensureBindEnabled();
     String walletSub = requireWalletSubFromAccessToken(authorizationHeader);
     riskService.checkBindRateLimit(walletSub);
 
-    AuthCodeRecord codeRecord = consumeValidAuthCode(request.authCode());
+    AuthCodeRecord codeRecord = consumeValidAuthCode(request.authCode(), deviceId);
     String providerSub = codeRecord.providerSub();
 
     Optional<String> existingOwner = store.getWalletSubByProviderSub(providerSub);
@@ -346,14 +934,122 @@ public class AuthService {
     return jwtService.web3AuthJwksJson();
   }
 
-  public String callbackRedirectUrl(String appRedirectUri, AuthDtos.AuthCodeResponse response) {
-    return UriComponentsBuilder.fromUriString(appRedirectUri)
-        .queryParam("provider", response.provider())
-        .queryParam("providerUserId", response.providerUserId())
-        .queryParam("providerSub", response.providerSub())
-        .queryParam("authCode", response.code())
-        .build(true)
-        .toUriString();
+  public String callbackRedirectUrl(String appRedirectUri, AuthDtos.AuthCodeResponse response, String state) {
+    UriComponentsBuilder b =
+        UriComponentsBuilder.fromUriString(appRedirectUri)
+            .queryParam("authCode", response.code());
+    if (StringUtils.hasText(state)) {
+      b = b.queryParam("state", state);
+    }
+    return b.build(true).toUriString();
+  }
+
+  public String tryResolveXAppRedirectUri(String state) {
+    String stateSecret = authProperties.getX().getStateSecret();
+    if (!StringUtils.hasText(stateSecret)) return null;
+    if (!XOAuthStateTokens.looksLikeToken(state)) return null;
+
+    XOAuthStateTokens.Parsed parsed =
+        XOAuthStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
+    if (parsed == null) return null;
+    String appRedirectUri = parsed.appRedirectUri();
+    if (!StringUtils.hasText(appRedirectUri)) return null;
+    try {
+      validateAppRedirect(appRedirectUri);
+    } catch (Exception ignored) {
+      return null;
+    }
+    return appRedirectUri;
+  }
+
+  public String tryResolveTelegramAppRedirectUri(String state) {
+    String stateSecret = authProperties.getTg().getStateSecret();
+    String appRedirectUri;
+    if (StringUtils.hasText(stateSecret) && TelegramOidcStateTokens.looksLikeToken(state)) {
+      TelegramOidcStateTokens.Parsed parsed =
+          TelegramOidcStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
+      if (parsed == null) return null;
+      appRedirectUri = parsed.appRedirectUri();
+    } else {
+      OAuthStateRecord record = store.peekOAuthState(state).orElse(null);
+      if (record == null || !AuthProvider.TG.code().equals(record.provider())) return null;
+      appRedirectUri = record.appRedirectUri();
+    }
+    if (!StringUtils.hasText(appRedirectUri)) return null;
+    try {
+      validateAppRedirect(appRedirectUri);
+    } catch (Exception ignored) {
+      return null;
+    }
+    return appRedirectUri;
+  }
+
+  public String callbackErrorRedirectUrl(String appRedirectUri, AuthException error, String state) {
+    UriComponentsBuilder b =
+        UriComponentsBuilder.fromUriString(appRedirectUri)
+            .queryParam("errorCode", error == null ? "UNKNOWN" : error.getCode().name())
+            .queryParam("errorDescription", error == null ? "unknown error" : error.getMessage());
+    if (error != null && error.getRetryAfterSeconds() != null && error.getRetryAfterSeconds() > 0) {
+      b = b.queryParam("retryAfterSeconds", error.getRetryAfterSeconds());
+    }
+    if (StringUtils.hasText(state)) {
+      b = b.queryParam("state", state);
+    }
+    if (error != null && error.getDetails() != null) {
+      Object resumeToken = error.getDetails().get("resumeToken");
+      if (resumeToken instanceof String s && StringUtils.hasText(s)) {
+        b = b.queryParam("resumeToken", s);
+      }
+    }
+    return b.build().encode().toUriString();
+  }
+
+  private ResolvedTelegramLoginState consumeTelegramLoginState(String state, String deviceId) {
+    String appRedirectUri;
+    String nonce;
+    String effectiveDeviceId = emptyToNull(deviceId);
+
+    String stateSecret = authProperties.getTg().getStateSecret();
+    if (StringUtils.hasText(stateSecret) && TelegramOidcStateTokens.looksLikeToken(state)) {
+      TelegramOidcStateTokens.Parsed parsed =
+          TelegramOidcStateTokens.parseAndVerify(objectMapper, stateSecret, state, now());
+      if (parsed == null) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+      }
+      appRedirectUri = parsed.appRedirectUri();
+      nonce = parsed.codeVerifier();
+      if (parsed.expiresAtMs() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      validateAppRedirect(appRedirectUri);
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    } else {
+      OAuthStateRecord stateRecord =
+          store
+              .consumeOAuthState(state)
+              .orElseThrow(
+                  () ->
+                      new AuthException(
+                          AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401));
+      if (!AuthProvider.TG.code().equals(stateRecord.provider())) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+      }
+      if (stateRecord.expiresAt() < now()) {
+        throw new AuthException(AuthErrorCode.OAUTH_STATE_EXPIRED, "oauth state expired", 401);
+      }
+      appRedirectUri = stateRecord.appRedirectUri();
+      nonce = stateRecord.codeVerifier();
+      validateAppRedirect(appRedirectUri);
+      if (!StringUtils.hasText(effectiveDeviceId)) {
+        effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
+      }
+    }
+    if (!StringUtils.hasText(nonce)) {
+      throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
+    }
+    return new ResolvedTelegramLoginState(appRedirectUri, nonce, effectiveDeviceId);
   }
 
   private SyncFavorites mergeFavorites(
@@ -437,15 +1133,54 @@ public class AuthService {
   }
 
   private WalletProfile getOrCreateWallet(String walletSub) {
-    return store.getWalletProfile(walletSub).orElseGet(() -> WalletProfile.create(walletSub, now()));
+    return store
+        .getWalletProfile(walletSub)
+        .orElseGet(
+            () -> {
+              WalletProfile created = WalletProfile.create(walletSub, now());
+              store.putWalletProfile(created);
+              return created;
+            });
   }
 
-  private AuthCodeRecord consumeValidAuthCode(String code) {
+  private static String normalizeEvmAddressLower(String input) {
+    String raw = input == null ? "" : input.trim();
+    String hex = raw.startsWith("0x") || raw.startsWith("0X") ? raw.substring(2) : raw;
+    if (hex.length() != 40 || !hex.matches("^[0-9a-fA-F]{40}$")) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "invalid address", 400);
+    }
+    return ("0x" + hex).toLowerCase(Locale.ROOT);
+  }
+
+  private static String requireExternalBaseUrl(String externalBaseUrl) {
+    String baseUrl = emptyToNull(externalBaseUrl);
+    if (baseUrl == null) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "missing base url", 400);
+    }
+    try {
+      URI parsed = URI.create(baseUrl);
+      if (!StringUtils.hasText(parsed.getScheme()) || !StringUtils.hasText(parsed.getHost())) {
+        throw new IllegalArgumentException("invalid base url");
+      }
+    } catch (Exception e) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "invalid base url", 400);
+    }
+    return baseUrl;
+  }
+
+  private AuthCodeRecord consumeValidAuthCode(String code, String deviceId) {
     long now = now();
     AuthCodeRecord record =
         store
             .getAuthCode(code)
             .orElseThrow(() -> new AuthException(AuthErrorCode.AUTH_CODE_INVALID, "invalid auth code", 401));
+    String expectedDeviceId = emptyToNull(record.deviceId());
+    String actualDeviceId = emptyToNull(deviceId);
+    if (expectedDeviceId != null) {
+      if (actualDeviceId == null || !expectedDeviceId.equals(actualDeviceId)) {
+        throw new AuthException(AuthErrorCode.UNAUTHORIZED, "auth code device mismatch", 401);
+      }
+    }
     long remainingMs = record.expiresAt() - now;
     long ttlSeconds = Math.max(1, (remainingMs + 999) / 1000);
     boolean firstUse = store.markAuthCodeUsedOnce(record.code(), ttlSeconds);
@@ -464,6 +1199,7 @@ public class AuthService {
             record.provider(),
             record.providerUserId(),
             record.providerSub(),
+            record.deviceId(),
             record.createdAt(),
             record.expiresAt(),
             now);
@@ -509,14 +1245,19 @@ public class AuthService {
   }
 
   private AuthCodeRecord issueAuthCode(
-      AuthProvider provider, String providerUserId, String providerSub) {
+      AuthProvider provider, String providerUserId, String providerSub, String deviceId) {
     long now = now();
+    String normalizedDeviceId = emptyToNull(deviceId);
+    if (!StringUtils.hasText(normalizedDeviceId)) {
+      throw new AuthException(AuthErrorCode.UNAUTHORIZED, "missing device id", 401);
+    }
     AuthCodeRecord authCode =
         new AuthCodeRecord(
             AuthUtils.randomBase64Url(24),
             provider.code(),
             providerUserId,
             providerSub,
+            normalizedDeviceId,
             now,
             now + authProperties.getOneTimeCodeTtlSeconds() * 1000,
             null);
@@ -542,10 +1283,18 @@ public class AuthService {
     }
   }
 
-  private String requireWalletSubFromAccessToken(String authorizationHeader) {
+  private AuthJwtService.AccessTokenClaims requireActiveAccessTokenClaims(String authorizationHeader) {
     String token = extractBearerToken(authorizationHeader);
     AuthJwtService.AccessTokenClaims claims = jwtService.verifyAccessToken(token);
-    return claims.walletSub();
+    Long deletedAt = store.getWalletDeletedAt(claims.walletSub()).orElse(null);
+    if (deletedAt != null && claims.issuedAtEpochMs() <= deletedAt) {
+      throw new AuthException(AuthErrorCode.ACCOUNT_DELETED, "account deleted", 401);
+    }
+    return claims;
+  }
+
+  private String requireWalletSubFromAccessToken(String authorizationHeader) {
+    return requireActiveAccessTokenClaims(authorizationHeader).walletSub();
   }
 
   private String extractBearerToken(String authorizationHeader) {
@@ -589,6 +1338,47 @@ public class AuthService {
     }
   }
 
+  private void ensureAppleEnabled() {
+    if (!authProperties.isAppleEnabled()) {
+      throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "apple login disabled", 403);
+    }
+  }
+
+  private void ensureTgLegacyWidgetEnabled() {
+    if (!authProperties.getTg().isLegacyWidgetEnabled()) {
+      throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "telegram legacy widget disabled", 403);
+    }
+  }
+
+  private void validateTelegramLoginLibraryConfig() {
+    AuthProperties.Tg tg = authProperties.getTg();
+    if (!StringUtils.hasText(tg.resolvedClientId())
+        || !StringUtils.hasText(tg.getJwksUri())
+        || !StringUtils.hasText(tg.getIssuer())) {
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "telegram login not configured", 503);
+    }
+  }
+
+  private void validateAppleLoginConfig() {
+    AuthProperties.Apple apple = authProperties.getApple();
+    if (apple.audienceList().isEmpty()
+        || !StringUtils.hasText(apple.getJwksUri())
+        || !StringUtils.hasText(apple.getIssuer())) {
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "apple login not configured", 503);
+    }
+  }
+
+  private void validateTelegramOidcCodeFlowConfig() {
+    AuthProperties.Tg tg = authProperties.getTg();
+    validateTelegramLoginLibraryConfig();
+    if (!StringUtils.hasText(tg.getClientSecret())
+        || !StringUtils.hasText(tg.getRedirectUri())
+        || !StringUtils.hasText(tg.getAuthorizeEndpoint())
+        || !StringUtils.hasText(tg.getTokenEndpoint())) {
+      throw new AuthException(AuthErrorCode.PROVIDER_UNAVAILABLE, "telegram oauth not configured", 503);
+    }
+  }
+
   private void ensureBindEnabled() {
     if (!authProperties.isBindEnabled()) {
       throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "provider bind disabled", 403);
@@ -611,5 +1401,9 @@ public class AuthService {
     return v.isEmpty() ? null : v;
   }
 
-  public record XCallbackResult(AuthDtos.AuthCodeResponse payload, String appRedirectUri) {}
+  public record XCallbackResult(AuthDtos.AuthCodeResponse payload, String appRedirectUri, String state) {}
+
+  public record TelegramWidgetStartContext(String appRedirectUri, String deviceId) {}
+
+  private record ResolvedTelegramLoginState(String appRedirectUri, String nonce, String deviceId) {}
 }

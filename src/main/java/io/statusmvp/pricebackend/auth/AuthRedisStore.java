@@ -5,22 +5,37 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.statusmvp.pricebackend.auth.model.AuthCodeRecord;
 import io.statusmvp.pricebackend.auth.model.OAuthStateRecord;
 import io.statusmvp.pricebackend.auth.model.RefreshTokenRecord;
+import io.statusmvp.pricebackend.auth.model.SiweNonceRecord;
 import io.statusmvp.pricebackend.auth.model.WalletProfile;
 import java.time.Duration;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
+import org.springframework.util.StringUtils;
 
 @Service
 public class AuthRedisStore {
   private static final String PREFIX_OAUTH_STATE = "auth:oauth:state:";
+  private static final String PREFIX_OAUTH_STATE_DEVICE = "auth:oauth:state_device:";
   private static final String PREFIX_AUTH_CODE = "auth:code:";
   private static final String PREFIX_AUTH_CODE_USED = "auth:code:used:";
   private static final String PREFIX_PROVIDER_TO_WALLET = "auth:provider:";
   private static final String PREFIX_WALLET = "auth:wallet:";
+  private static final String PREFIX_WALLET_REFRESH = "auth:wallet_refresh:";
+  private static final String PREFIX_WALLET_DELETED_AT = "auth:wallet_deleted_at:";
   private static final String PREFIX_REFRESH = "auth:refresh:";
   private static final String PREFIX_JTI = "auth:jti:";
+  private static final String PREFIX_SIWE_NONCE = "auth:siwe:nonce:";
+  private static final DefaultRedisScript<String> GET_AND_DELETE_SCRIPT =
+      new DefaultRedisScript<>(
+          "local value = redis.call('GET', KEYS[1]); "
+              + "if value then redis.call('DEL', KEYS[1]); end; "
+              + "return value",
+          String.class);
 
   private final StringRedisTemplate redis;
   private final ObjectMapper objectMapper;
@@ -37,9 +52,31 @@ public class AuthRedisStore {
   public Optional<OAuthStateRecord> consumeOAuthState(String state) {
     if (state == null || state.isBlank()) return Optional.empty();
     String key = PREFIX_OAUTH_STATE + state;
-    Optional<OAuthStateRecord> out = getJson(key, OAuthStateRecord.class);
-    redis.delete(key);
-    return out;
+    return getAndDeleteJson(key, OAuthStateRecord.class);
+  }
+
+  public Optional<OAuthStateRecord> peekOAuthState(String state) {
+    if (state == null || state.isBlank()) return Optional.empty();
+    return getJson(PREFIX_OAUTH_STATE + state, OAuthStateRecord.class);
+  }
+
+  public void putOAuthStateDevice(String state, String deviceId, long ttlSeconds) {
+    if (state == null || state.isBlank()) return;
+    if (deviceId == null || deviceId.isBlank()) return;
+    redis
+        .opsForValue()
+        .set(
+            PREFIX_OAUTH_STATE_DEVICE + state,
+            deviceId.trim(),
+            Duration.ofSeconds(Math.max(1, ttlSeconds)));
+  }
+
+  public Optional<String> consumeOAuthStateDevice(String state) {
+    if (state == null || state.isBlank()) return Optional.empty();
+    String key = PREFIX_OAUTH_STATE_DEVICE + state;
+    String out = getAndDeleteRaw(key);
+    if (out == null || out.isBlank()) return Optional.empty();
+    return Optional.of(out.trim());
   }
 
   public void putAuthCode(AuthCodeRecord record, long ttlSeconds) {
@@ -100,8 +137,33 @@ public class AuthRedisStore {
     putJson(PREFIX_WALLET + walletProfile.walletSub(), walletProfile, 0);
   }
 
+  public void deleteWalletProfile(String walletSub) {
+    if (walletSub == null || walletSub.isBlank()) return;
+    redis.delete(PREFIX_WALLET + walletSub);
+  }
+
   public void putRefreshToken(RefreshTokenRecord record, long ttlSeconds) {
     putJson(PREFIX_REFRESH + record.tokenHash(), record, ttlSeconds);
+    if (StringUtils.hasText(record.walletSub()) && StringUtils.hasText(record.tokenHash())) {
+      String setKey = PREFIX_WALLET_REFRESH + record.walletSub().trim();
+      redis.opsForSet().add(setKey, record.tokenHash().trim());
+      if (ttlSeconds > 0) {
+        Long existingTtl = redis.getExpire(setKey, TimeUnit.SECONDS);
+        if (existingTtl == null || existingTtl < ttlSeconds) {
+          redis.expire(setKey, Duration.ofSeconds(Math.max(1, ttlSeconds)));
+        }
+      }
+    }
+  }
+
+  public void putSiweNonce(SiweNonceRecord record, long ttlSeconds) {
+    putJson(PREFIX_SIWE_NONCE + record.nonce(), record, ttlSeconds);
+  }
+
+  public Optional<SiweNonceRecord> consumeSiweNonce(String nonce) {
+    if (nonce == null || nonce.isBlank()) return Optional.empty();
+    String key = PREFIX_SIWE_NONCE + nonce;
+    return getAndDeleteJson(key, SiweNonceRecord.class);
   }
 
   public Optional<RefreshTokenRecord> getRefreshTokenByHash(String tokenHash) {
@@ -110,7 +172,50 @@ public class AuthRedisStore {
   }
 
   public void consumeRefreshTokenByHash(String tokenHash) {
+    if (tokenHash == null || tokenHash.isBlank()) return;
+    Optional<RefreshTokenRecord> record = getRefreshTokenByHash(tokenHash);
     redis.delete(PREFIX_REFRESH + tokenHash);
+    record.ifPresent(value -> removeRefreshTokenIndex(value.walletSub(), tokenHash));
+  }
+
+  public int revokeAllRefreshTokensForWallet(String walletSub) {
+    if (walletSub == null || walletSub.isBlank()) return 0;
+    String setKey = PREFIX_WALLET_REFRESH + walletSub.trim();
+    Set<String> tokenHashes = redis.opsForSet().members(setKey);
+    int revoked = 0;
+    if (tokenHashes != null) {
+      for (String tokenHash : tokenHashes) {
+        if (!StringUtils.hasText(tokenHash)) continue;
+        Boolean removed = redis.delete(PREFIX_REFRESH + tokenHash.trim());
+        if (Boolean.TRUE.equals(removed)) {
+          revoked++;
+        }
+      }
+    }
+    redis.delete(setKey);
+    return revoked;
+  }
+
+  public void markWalletDeleted(String walletSub, long deletedAtMs, long ttlSeconds) {
+    if (walletSub == null || walletSub.isBlank()) return;
+    String key = PREFIX_WALLET_DELETED_AT + walletSub.trim();
+    String value = String.valueOf(deletedAtMs);
+    if (ttlSeconds > 0) {
+      redis.opsForValue().set(key, value, Duration.ofSeconds(Math.max(1, ttlSeconds)));
+    } else {
+      redis.opsForValue().set(key, value);
+    }
+  }
+
+  public Optional<Long> getWalletDeletedAt(String walletSub) {
+    if (walletSub == null || walletSub.isBlank()) return Optional.empty();
+    String raw = redis.opsForValue().get(PREFIX_WALLET_DELETED_AT + walletSub.trim());
+    if (!StringUtils.hasText(raw)) return Optional.empty();
+    try {
+      return Optional.of(Long.parseLong(raw.trim()));
+    } catch (NumberFormatException ignored) {
+      return Optional.empty();
+    }
   }
 
   public boolean rememberJti(String jti, long ttlSeconds) {
@@ -126,6 +231,30 @@ public class AuthRedisStore {
       return Optional.of(objectMapper.readValue(raw, type));
     } catch (Exception e) {
       return Optional.empty();
+    }
+  }
+
+  private <T> Optional<T> getAndDeleteJson(String key, Class<T> type) {
+    try {
+      String raw = getAndDeleteRaw(key);
+      if (raw == null || raw.isBlank()) return Optional.empty();
+      return Optional.of(objectMapper.readValue(raw, type));
+    } catch (Exception e) {
+      return Optional.empty();
+    }
+  }
+
+  private String getAndDeleteRaw(String key) {
+    return redis.execute(GET_AND_DELETE_SCRIPT, List.of(key));
+  }
+
+  private void removeRefreshTokenIndex(String walletSub, String tokenHash) {
+    if (!StringUtils.hasText(walletSub) || !StringUtils.hasText(tokenHash)) return;
+    String setKey = PREFIX_WALLET_REFRESH + walletSub.trim();
+    redis.opsForSet().remove(setKey, tokenHash.trim());
+    Long size = redis.opsForSet().size(setKey);
+    if (size != null && size <= 0) {
+      redis.delete(setKey);
     }
   }
 

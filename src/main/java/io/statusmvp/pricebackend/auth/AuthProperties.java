@@ -15,17 +15,22 @@ public class AuthProperties {
   private long web3authJwtTtlSeconds = 300;
   private long accessTokenTtlSeconds = 900;
   private long refreshTokenTtlSeconds = 2_592_000;
+  private long siweNonceTtlSeconds = 600;
+  private String siweStatement = "VeilWallet wants you to sign in.";
   private boolean xEnabled = true;
   private boolean tgEnabled = true;
+  private boolean appleEnabled = true;
   private boolean syncEnabled = true;
   private boolean bindEnabled = true;
   private boolean metricsEnabled = true;
   private String appRedirectAllowlist = "";
+  private String publicBaseUrl = "";
 
   private Web3Auth web3auth = new Web3Auth();
   private AppJwt appJwt = new AppJwt();
   private X x = new X();
   private Tg tg = new Tg();
+  private Apple apple = new Apple();
   private Risk risk = new Risk();
 
   public boolean isEnabled() {
@@ -76,6 +81,22 @@ public class AuthProperties {
     this.refreshTokenTtlSeconds = refreshTokenTtlSeconds;
   }
 
+  public long getSiweNonceTtlSeconds() {
+    return siweNonceTtlSeconds;
+  }
+
+  public void setSiweNonceTtlSeconds(long siweNonceTtlSeconds) {
+    this.siweNonceTtlSeconds = siweNonceTtlSeconds;
+  }
+
+  public String getSiweStatement() {
+    return siweStatement;
+  }
+
+  public void setSiweStatement(String siweStatement) {
+    this.siweStatement = siweStatement;
+  }
+
   public boolean isXEnabled() {
     return xEnabled;
   }
@@ -90,6 +111,14 @@ public class AuthProperties {
 
   public void setTgEnabled(boolean tgEnabled) {
     this.tgEnabled = tgEnabled;
+  }
+
+  public boolean isAppleEnabled() {
+    return appleEnabled;
+  }
+
+  public void setAppleEnabled(boolean appleEnabled) {
+    this.appleEnabled = appleEnabled;
   }
 
   public boolean isSyncEnabled() {
@@ -124,6 +153,14 @@ public class AuthProperties {
     this.appRedirectAllowlist = appRedirectAllowlist;
   }
 
+  public String getPublicBaseUrl() {
+    return publicBaseUrl;
+  }
+
+  public void setPublicBaseUrl(String publicBaseUrl) {
+    this.publicBaseUrl = publicBaseUrl;
+  }
+
   public Web3Auth getWeb3auth() {
     return web3auth;
   }
@@ -154,6 +191,14 @@ public class AuthProperties {
 
   public void setTg(Tg tg) {
     this.tg = tg;
+  }
+
+  public Apple getApple() {
+    return apple;
+  }
+
+  public void setApple(Apple apple) {
+    this.apple = apple;
   }
 
   public Risk getRisk() {
@@ -267,6 +312,16 @@ public class AuthProperties {
     private String clientId = "";
     private String clientSecret = "";
     private String redirectUri = "";
+    /**
+     * Optional secret for stateless OAuth state tokens.
+     *
+     * If set (recommended in multi-node deployments), the backend will:
+     * - issue a signed state token (no Redis dependency for state)
+     * - deterministically derive the PKCE code_verifier from the state payload
+     *
+     * Keep this value the same across all nodes.
+     */
+    private String stateSecret = "";
     private String scopes = "tweet.read users.read offline.access";
     private String authorizeEndpoint = "https://twitter.com/i/oauth2/authorize";
     private String tokenEndpoint = "https://api.twitter.com/2/oauth2/token";
@@ -294,6 +349,14 @@ public class AuthProperties {
 
     public void setRedirectUri(String redirectUri) {
       this.redirectUri = redirectUri;
+    }
+
+    public String getStateSecret() {
+      return stateSecret;
+    }
+
+    public void setStateSecret(String stateSecret) {
+      this.stateSecret = stateSecret;
     }
 
     public String getScopes() {
@@ -331,11 +394,95 @@ public class AuthProperties {
     public List<String> scopeList() {
       return AuthProperties.splitCsv(scopes.replace(" ", ","));
     }
+
   }
 
   public static class Tg {
+    private String clientId = "";
+    private String clientSecret = "";
+    private String redirectUri = "";
+    private String stateSecret = "";
+    private String scopes = "openid";
+    private String issuer = "https://oauth.telegram.org";
+    private String authorizeEndpoint = "https://oauth.telegram.org/auth";
+    private String tokenEndpoint = "https://oauth.telegram.org/token";
+    private String jwksUri = "https://oauth.telegram.org/.well-known/jwks.json";
     private String botToken = "";
+    private String botUsername = "";
     private long authMaxAgeSeconds = 600;
+    private boolean legacyWidgetEnabled = false;
+
+    public String getClientId() {
+      return clientId;
+    }
+
+    public void setClientId(String clientId) {
+      this.clientId = clientId;
+    }
+
+    public String getClientSecret() {
+      return clientSecret;
+    }
+
+    public void setClientSecret(String clientSecret) {
+      this.clientSecret = clientSecret;
+    }
+
+    public String getRedirectUri() {
+      return redirectUri;
+    }
+
+    public void setRedirectUri(String redirectUri) {
+      this.redirectUri = redirectUri;
+    }
+
+    public String getStateSecret() {
+      return stateSecret;
+    }
+
+    public void setStateSecret(String stateSecret) {
+      this.stateSecret = stateSecret;
+    }
+
+    public String getScopes() {
+      return scopes;
+    }
+
+    public void setScopes(String scopes) {
+      this.scopes = scopes;
+    }
+
+    public String getIssuer() {
+      return issuer;
+    }
+
+    public void setIssuer(String issuer) {
+      this.issuer = issuer;
+    }
+
+    public String getAuthorizeEndpoint() {
+      return authorizeEndpoint;
+    }
+
+    public void setAuthorizeEndpoint(String authorizeEndpoint) {
+      this.authorizeEndpoint = authorizeEndpoint;
+    }
+
+    public String getTokenEndpoint() {
+      return tokenEndpoint;
+    }
+
+    public void setTokenEndpoint(String tokenEndpoint) {
+      this.tokenEndpoint = tokenEndpoint;
+    }
+
+    public String getJwksUri() {
+      return jwksUri;
+    }
+
+    public void setJwksUri(String jwksUri) {
+      this.jwksUri = jwksUri;
+    }
 
     public String getBotToken() {
       return botToken;
@@ -345,6 +492,14 @@ public class AuthProperties {
       this.botToken = botToken;
     }
 
+    public String getBotUsername() {
+      return botUsername;
+    }
+
+    public void setBotUsername(String botUsername) {
+      this.botUsername = botUsername;
+    }
+
     public long getAuthMaxAgeSeconds() {
       return authMaxAgeSeconds;
     }
@@ -352,11 +507,76 @@ public class AuthProperties {
     public void setAuthMaxAgeSeconds(long authMaxAgeSeconds) {
       this.authMaxAgeSeconds = authMaxAgeSeconds;
     }
+
+    public boolean isLegacyWidgetEnabled() {
+      return legacyWidgetEnabled;
+    }
+
+    public void setLegacyWidgetEnabled(boolean legacyWidgetEnabled) {
+      this.legacyWidgetEnabled = legacyWidgetEnabled;
+    }
+
+    public List<String> scopeList() {
+      return AuthProperties.splitCsv(scopes.replace(" ", ","));
+    }
+
+    public String resolvedClientId() {
+      if (clientId != null && !clientId.isBlank()) {
+        return clientId.trim();
+      }
+      if (botToken == null || botToken.isBlank()) {
+        return "";
+      }
+      int colon = botToken.indexOf(':');
+      if (colon <= 0) {
+        return "";
+      }
+      String prefix = botToken.substring(0, colon).trim();
+      if (!prefix.matches("^\\d+$")) {
+        return "";
+      }
+      return prefix;
+    }
+  }
+
+  public static class Apple {
+    private String audiences = "com.veilwallet.app";
+    private String issuer = "https://appleid.apple.com";
+    private String jwksUri = "https://appleid.apple.com/auth/keys";
+
+    public String getAudiences() {
+      return audiences;
+    }
+
+    public void setAudiences(String audiences) {
+      this.audiences = audiences;
+    }
+
+    public String getIssuer() {
+      return issuer;
+    }
+
+    public void setIssuer(String issuer) {
+      this.issuer = issuer;
+    }
+
+    public String getJwksUri() {
+      return jwksUri;
+    }
+
+    public void setJwksUri(String jwksUri) {
+      this.jwksUri = jwksUri;
+    }
+
+    public List<String> audienceList() {
+      return AuthProperties.splitCsv(audiences.replace(" ", ","));
+    }
   }
 
   public static class Risk {
     private String blacklistIps = "";
     private String blacklistProviderSubs = "";
+    private String trustedProxyIps = "127.0.0.1,::1";
     private int loginIpLimit = 20;
     private int loginDeviceLimit = 30;
     private int bindAccountLimit = 20;
@@ -376,6 +596,14 @@ public class AuthProperties {
 
     public void setBlacklistProviderSubs(String blacklistProviderSubs) {
       this.blacklistProviderSubs = blacklistProviderSubs;
+    }
+
+    public String getTrustedProxyIps() {
+      return trustedProxyIps;
+    }
+
+    public void setTrustedProxyIps(String trustedProxyIps) {
+      this.trustedProxyIps = trustedProxyIps;
     }
 
     public int getLoginIpLimit() {
@@ -416,6 +644,10 @@ public class AuthProperties {
 
     public List<String> blacklistProviderSubList() {
       return AuthProperties.splitCsv(blacklistProviderSubs);
+    }
+
+    public List<String> trustedProxyIpList() {
+      return AuthProperties.splitCsv(trustedProxyIps);
     }
   }
 }

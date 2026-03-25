@@ -43,12 +43,16 @@ app:
     web3authJwtTtlSeconds: ${AUTH_WEB3AUTH_JWT_TTL_SECONDS:300}
     accessTokenTtlSeconds: ${AUTH_ACCESS_TOKEN_TTL_SECONDS:900}
     refreshTokenTtlSeconds: ${AUTH_REFRESH_TOKEN_TTL_SECONDS:2592000}
+    siweNonceTtlSeconds: ${AUTH_SIWE_NONCE_TTL_SECONDS:600}
+    siweStatement: ${AUTH_SIWE_STATEMENT:VeilWallet wants you to sign in.}
     xEnabled: ${AUTH_X_ENABLED:true}
     tgEnabled: ${AUTH_TG_ENABLED:true}
+    appleEnabled: ${AUTH_APPLE_ENABLED:true}
     syncEnabled: ${AUTH_SYNC_ENABLED:true}
     bindEnabled: ${AUTH_BIND_ENABLED:true}
     metricsEnabled: ${AUTH_METRICS_ENABLED:true}
     appRedirectAllowlist: ${AUTH_APP_REDIRECT_ALLOWLIST:}
+    publicBaseUrl: ${AUTH_PUBLIC_BASE_URL:}
     web3auth:
       # Optional: Web3Auth dashboard clientId/clientSecret.
       # Not required for the current JWT verifier flow, but kept server-side for future use.
@@ -66,16 +70,35 @@ app:
       clientId: ${AUTH_X_CLIENT_ID:}
       clientSecret: ${AUTH_X_CLIENT_SECRET:}
       redirectUri: ${AUTH_X_REDIRECT_URI:}
-      scopes: ${AUTH_X_SCOPES:tweet.read users.read offline.access}
+      stateSecret: ${AUTH_X_STATE_SECRET:}
+      # Minimal scopes for wallet login. We only need `users.read` to call /2/users/me.
+      # Keep this minimal: requesting unsupported scopes can cause `invalid_scope` during authorization.
+      scopes: ${AUTH_X_SCOPES:users.read}
       authorizeEndpoint: ${AUTH_X_AUTHORIZE_ENDPOINT:https://twitter.com/i/oauth2/authorize}
       tokenEndpoint: ${AUTH_X_TOKEN_ENDPOINT:https://api.twitter.com/2/oauth2/token}
       userinfoEndpoint: ${AUTH_X_USERINFO_ENDPOINT:https://api.twitter.com/2/users/me}
     tg:
+      clientId: ${AUTH_TG_CLIENT_ID:}
+      clientSecret: ${AUTH_TG_CLIENT_SECRET:}
+      redirectUri: ${AUTH_TG_REDIRECT_URI:}
+      stateSecret: ${AUTH_TG_STATE_SECRET:}
+      scopes: ${AUTH_TG_SCOPES:openid}
+      issuer: ${AUTH_TG_ISSUER:https://oauth.telegram.org}
+      authorizeEndpoint: ${AUTH_TG_AUTHORIZE_ENDPOINT:https://oauth.telegram.org/auth}
+      tokenEndpoint: ${AUTH_TG_TOKEN_ENDPOINT:https://oauth.telegram.org/token}
+      jwksUri: ${AUTH_TG_JWKS_URI:https://oauth.telegram.org/.well-known/jwks.json}
       botToken: ${AUTH_TG_BOT_TOKEN:}
+      botUsername: ${AUTH_TG_BOT_USERNAME:}
       authMaxAgeSeconds: ${AUTH_TG_AUTH_MAX_AGE_SECONDS:600}
+      legacyWidgetEnabled: ${AUTH_TG_LEGACY_WIDGET_ENABLED:false}
+    apple:
+      audiences: ${AUTH_APPLE_AUDIENCES:com.veilwallet.app}
+      issuer: ${AUTH_APPLE_ISSUER:https://appleid.apple.com}
+      jwksUri: ${AUTH_APPLE_JWKS_URI:https://appleid.apple.com/auth/keys}
     risk:
       blacklistIps: ${AUTH_RISK_BLACKLIST_IPS:}
       blacklistProviderSubs: ${AUTH_RISK_BLACKLIST_PROVIDER_SUBS:}
+      trustedProxyIps: ${AUTH_RISK_TRUSTED_PROXY_IPS:127.0.0.1,::1}
       loginIpLimit: ${AUTH_RISK_LOGIN_IP_LIMIT:20}
       loginDeviceLimit: ${AUTH_RISK_LOGIN_DEVICE_LIMIT:30}
       bindAccountLimit: ${AUTH_RISK_BIND_ACCOUNT_LIMIT:20}
@@ -136,5 +159,3 @@ management:
     web:
       exposure:
         include: health,info,prometheus
-
-
