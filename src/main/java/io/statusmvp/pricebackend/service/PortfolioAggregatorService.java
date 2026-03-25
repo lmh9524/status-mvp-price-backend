@@ -3,6 +3,7 @@ package io.statusmvp.pricebackend.service;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.statusmvp.pricebackend.model.PortfolioAssetSnapshotV2;
+import io.statusmvp.pricebackend.model.PortfolioChainSummary;
 import io.statusmvp.pricebackend.model.PortfolioSnapshot;
 import io.statusmvp.pricebackend.model.PortfolioSnapshotV2;
 import java.math.BigDecimal;
@@ -19,18 +20,33 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Optional;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.web3j.abi.FunctionEncoder;
+import org.web3j.abi.FunctionReturnDecoder;
+import org.web3j.abi.TypeReference;
+import org.web3j.abi.datatypes.Address;
+import org.web3j.abi.datatypes.Function;
+import org.web3j.abi.datatypes.Type;
+import org.web3j.abi.datatypes.generated.Uint256;
+import org.web3j.crypto.Keys;
+import org.web3j.protocol.Web3j;
+import org.web3j.protocol.core.DefaultBlockParameterName;
+import org.web3j.protocol.core.methods.request.Transaction;
+import org.web3j.protocol.core.methods.response.EthCall;
 
 @Service
 public class PortfolioAggregatorService {
   private static final Logger log = LoggerFactory.getLogger(PortfolioAggregatorService.class);
 
   private static final Pattern EVM_ADDRESS = Pattern.compile("^0x[0-9a-fA-F]{40}$");
+  private static final int V1_SUMMARY_SNAPSHOT_LIMIT = 1000;
 
   private static final Map<Integer, ChainMeta> SUPPORTED_CHAINS =
       Map.of(
@@ -40,9 +56,45 @@ public class PortfolioAggregatorService {
           8453, new ChainMeta("base", "ETH"),
           42161, new ChainMeta("arbitrum", "ETH"));
 
+  // Best-effort: if upstream doesn't provide thumbnails, fall back to TrustWallet's public assets repo.
+  // Client still needs to handle 404 (not all assets exist).
+  private static final String TRUSTWALLET_CDN_PREFIX =
+      "https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains/";
+  private static final Map<Integer, String> TRUSTWALLET_CHAIN_SLUG_BY_ID =
+      Map.of(
+          1, "ethereum",
+          10, "optimism",
+          56, "smartchain",
+          8453, "base",
+          42161, "arbitrum");
+
+  private static String buildTrustWalletChainLogoUrl(Integer chainId) {
+    if (chainId == null) return null;
+    String slug = TRUSTWALLET_CHAIN_SLUG_BY_ID.get(chainId);
+    if (slug == null || slug.isBlank()) return null;
+    return TRUSTWALLET_CDN_PREFIX + slug + "/info/logo.png";
+  }
+
+  private static String buildTrustWalletAssetLogoUrl(Integer chainId, String contract) {
+    if (chainId == null) return null;
+    String slug = TRUSTWALLET_CHAIN_SLUG_BY_ID.get(chainId);
+    if (slug == null || slug.isBlank()) return null;
+    String addr = contract == null ? "" : contract.trim();
+    if (!EVM_ADDRESS.matcher(addr).matches()) return null;
+    try {
+      String checksum = Keys.toChecksumAddress(addr);
+      return TRUSTWALLET_CDN_PREFIX + slug + "/assets/" + checksum + "/logo.png";
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
   private final WebClient webClient;
   private final RedisCache cache;
   private final ObjectMapper mapper = new ObjectMapper();
+
+  private final Optional<Web3j> bscWeb3j;
+  private final VeilxDexPriceService veilxDex;
 
   private final String ankrBaseUrl;
   private final String ankrApiKey;
@@ -53,6 +105,8 @@ public class PortfolioAggregatorService {
   public PortfolioAggregatorService(
       WebClient webClient,
       RedisCache cache,
+      ObjectProvider<Web3j> bscWeb3jProvider,
+      VeilxDexPriceService veilxDex,
       @Value("${app.portfolio.ankrBaseUrl:https://rpc.ankr.com/multichain}") String ankrBaseUrl,
       @Value(
               "${app.portfolio.ankrApiKey:8ab456e0616fa58794745f952b83f719e7ea3af2d0c9cbac69b8f22323563de7}")
@@ -62,16 +116,31 @@ public class PortfolioAggregatorService {
       @Value("${app.portfolio.defaultChainIds:1,10,56,8453,42161}") String defaultChainIds) {
     this.webClient = webClient;
     this.cache = cache;
+    this.bscWeb3j = Optional.ofNullable(bscWeb3jProvider.getIfAvailable());
+    this.veilxDex = veilxDex;
     this.ankrBaseUrl = (ankrBaseUrl == null ? "" : ankrBaseUrl.trim()).replaceAll("/+$", "");
     this.ankrApiKey = ankrApiKey == null ? "" : ankrApiKey.trim();
     this.requestTtlSeconds = requestTtlSeconds;
     this.timeout = Duration.ofMillis(Math.max(1000L, timeoutMs));
-    this.defaultChainIds = normalizeChainIds(parseChainIds(defaultChainIds));
+    this.defaultChainIds = normalizeChainIds(parseChainIds(defaultChainIds), true);
   }
 
   public PortfolioSnapshot getPortfolio(String address, List<Integer> requestedChainIds) {
+    return getPortfolio(address, requestedChainIds, false);
+  }
+
+  public PortfolioSnapshot getPortfolio(
+      String address, List<Integer> requestedChainIds, boolean chainIdsExplicitlyRequested) {
     String normalizedAddress = normalizeAddress(address);
-    List<Integer> chainIds = normalizeChainIds(requestedChainIds);
+    List<Integer> chainIds = normalizeChainIds(requestedChainIds, !chainIdsExplicitlyRequested);
+    long now = Instant.now().toEpochMilli();
+
+    // If caller explicitly requested chainIds but none are supported, return an empty snapshot
+    // instead of silently falling back to default mainnet chains.
+    if (chainIdsExplicitlyRequested && chainIds.isEmpty()) {
+      return new PortfolioSnapshot(normalizedAddress, now, 0d, List.of());
+    }
+
     String requestKey = "req:portfolio:" + normalizedAddress + ":" + sha1(joinChainIds(chainIds));
 
     Optional<String> cached = cache.get(requestKey);
@@ -83,17 +152,26 @@ public class PortfolioAggregatorService {
       }
     }
 
-    long now = Instant.now().toEpochMilli();
-    // MVP: "all networks" total only needs an EVM multi-chain USD total.
-    // Use Ankr's precomputed `totalBalanceUsd` for speed and consistency.
-    double totalUsd = fetchTotalBalanceUsdMultiChain(normalizedAddress, chainIds).orElse(0d);
-
-    PortfolioSnapshot snapshot =
-        new PortfolioSnapshot(
+    Optional<PortfolioSnapshotV2> summarySource =
+        fetchSnapshotV2FromAnkr(
             normalizedAddress,
+            chainIds,
+            "usd",
             now,
-            round2(totalUsd),
-            List.of());
+            new SnapshotFilter(0d, true, V1_SUMMARY_SNAPSHOT_LIMIT));
+
+    List<PortfolioChainSummary> chains = buildPortfolioChainSummaries(chainIds, summarySource.orElse(null));
+    Double totalFromSnapshot =
+        summarySource
+            .map(PortfolioSnapshotV2::totalUsd)
+            .filter(v -> v != null && Double.isFinite(v))
+            .orElse(null);
+    double totalUsd =
+        totalFromSnapshot != null
+            ? totalFromSnapshot
+            : fetchTotalBalanceUsdMultiChain(normalizedAddress, chainIds).orElse(sumChainTotals(chains));
+
+    PortfolioSnapshot snapshot = new PortfolioSnapshot(normalizedAddress, now, round2(totalUsd), chains);
     try {
       cache.set(requestKey, mapper.writeValueAsString(snapshot), requestTtlSeconds);
     } catch (Exception ignored) {
@@ -109,10 +187,28 @@ public class PortfolioAggregatorService {
       Double minUsd,
       Boolean includeZero,
       Integer limit) {
+    return getPortfolioSnapshotV2(
+        address, requestedChainIds, currency, minUsd, includeZero, limit, false);
+  }
+
+  public PortfolioSnapshotV2 getPortfolioSnapshotV2(
+      String address,
+      List<Integer> requestedChainIds,
+      String currency,
+      Double minUsd,
+      Boolean includeZero,
+      Integer limit,
+      boolean chainIdsExplicitlyRequested) {
     String normalizedAddress = normalizeAddress(address);
-    List<Integer> chainIds = normalizeChainIds(requestedChainIds);
+    List<Integer> chainIds = normalizeChainIds(requestedChainIds, !chainIdsExplicitlyRequested);
     String cur = normalizeCurrency(currency);
     SnapshotFilter filter = normalizeSnapshotFilter(minUsd, includeZero, limit);
+    long now = Instant.now().toEpochMilli();
+
+    if (chainIdsExplicitlyRequested && chainIds.isEmpty()) {
+      return new PortfolioSnapshotV2(normalizedAddress, now, cur, 0d, Map.of(), List.of());
+    }
+
     String requestKey =
         "req:portfolio:v2:"
             + cur
@@ -136,10 +232,11 @@ public class PortfolioAggregatorService {
       }
     }
 
-    long now = Instant.now().toEpochMilli();
     PortfolioSnapshotV2 snapshot =
         fetchSnapshotV2FromAnkr(normalizedAddress, chainIds, cur, now, filter)
             .orElse(new PortfolioSnapshotV2(normalizedAddress, now, cur, 0d, Map.of(), List.of()));
+
+    snapshot = augmentSnapshotV2WithVeilTokens(snapshot, chainIds, filter);
 
     try {
       cache.set(requestKey, mapper.writeValueAsString(snapshot), requestTtlSeconds);
@@ -282,6 +379,9 @@ public class PortfolioAggregatorService {
         continue;
       }
       String logoUrl = normalizeBlankToNull(asset.path("thumbnail").asText(null));
+      if (logoUrl == null) {
+        logoUrl = isNative ? buildTrustWalletChainLogoUrl(chainId) : buildTrustWalletAssetLogoUrl(chainId, contract);
+      }
       Long blockNumber = parseLong(asset.path("blockHeight"));
       if (blockNumber != null) {
         Long prev = blockNumbersByChainId.get(chainId);
@@ -331,6 +431,192 @@ public class PortfolioAggregatorService {
             round2(finalTotal),
             Map.copyOf(blockNumbersByChainId),
             out));
+  }
+
+  private PortfolioSnapshotV2 augmentSnapshotV2WithVeilTokens(
+      PortfolioSnapshotV2 snapshot, List<Integer> chainIds, SnapshotFilter filter) {
+    if (snapshot == null || snapshot.assets() == null || chainIds == null) return snapshot;
+    if (!chainIds.contains(56)) return snapshot;
+    if (bscWeb3j.isEmpty()) return snapshot;
+
+    String veilxAddr = normalizeBlankToNull(veilxDex != null ? veilxDex.veilxContractLower() : null);
+    String viplAddr = normalizeBlankToNull(veilxDex != null ? veilxDex.viplContractLower() : null);
+    if ((veilxAddr == null || veilxAddr.isBlank()) && (viplAddr == null || viplAddr.isBlank())) {
+      return snapshot;
+    }
+
+    Map<String, Integer> idxByContractLower = new HashMap<>();
+    List<PortfolioAssetSnapshotV2> nextAssets = new ArrayList<>();
+    for (PortfolioAssetSnapshotV2 a : snapshot.assets()) {
+      if (a != null) {
+        nextAssets.add(a);
+        if (a.chainId() == 56 && !a.isNative()) {
+          String c = normalizeBlankToNull(a.contractAddress());
+          if (c != null) {
+            idxByContractLower.put(c.toLowerCase(Locale.ROOT), nextAssets.size() - 1);
+          }
+        }
+      }
+    }
+
+    addOrUpdateBscToken(
+        nextAssets,
+        idxByContractLower,
+        snapshot.address(),
+        filter,
+        veilxAddr,
+        "VEILX",
+        "VEILX",
+        () -> veilxDex != null ? veilxDex.fetchVeilxUsdPrice().orElse(null) : null);
+
+    addOrUpdateBscToken(
+        nextAssets,
+        idxByContractLower,
+        snapshot.address(),
+        filter,
+        viplAddr,
+        "VIPL",
+        "VeilPlus",
+        () -> veilxDex != null ? veilxDex.fetchViplUsdPrice().orElse(null) : null);
+
+    nextAssets.sort(
+        (a, b) -> {
+          double av = a != null && a.usdValue() != null ? a.usdValue() : 0d;
+          double bv = b != null && b.usdValue() != null ? b.usdValue() : 0d;
+          int cmp = Double.compare(bv, av);
+          if (cmp != 0) return cmp;
+          String as = a != null ? a.symbol() : "";
+          String bs = b != null ? b.symbol() : "";
+          return as.compareToIgnoreCase(bs);
+        });
+    if (filter != null && nextAssets.size() > filter.limit()) {
+      nextAssets = new ArrayList<>(nextAssets.subList(0, filter.limit()));
+    }
+
+    Double nextTotalUsd = snapshot.totalUsd();
+    double currentTotal = nextTotalUsd != null && Double.isFinite(nextTotalUsd) ? nextTotalUsd : 0d;
+    double sumUsd = 0d;
+    for (PortfolioAssetSnapshotV2 a : nextAssets) {
+      if (a == null) continue;
+      Double v = positiveOrNull(a.usdValue());
+      if (v != null) sumUsd += v;
+    }
+    if (sumUsd > currentTotal) {
+      nextTotalUsd = round2(sumUsd);
+    }
+
+    return new PortfolioSnapshotV2(
+        snapshot.address(),
+        snapshot.fetchedAt(),
+        snapshot.currency(),
+        nextTotalUsd,
+        snapshot.blockNumbersByChainId(),
+        nextAssets);
+  }
+
+  private void addOrUpdateBscToken(
+      List<PortfolioAssetSnapshotV2> assets,
+      Map<String, Integer> idxByContractLower,
+      String walletAddress,
+      SnapshotFilter filter,
+      String contractLower,
+      String symbol,
+      String name,
+      Supplier<Double> usdPriceSupplier) {
+    if (assets == null || idxByContractLower == null) return;
+    if (walletAddress == null || walletAddress.isBlank()) return;
+    String contract = normalizeBlankToNull(contractLower);
+    if (contract == null) return;
+    if (!EVM_ADDRESS.matcher(contract).matches()) return;
+
+    BigInteger raw =
+        fetchBscErc20BalanceRaw(contract, walletAddress).orElse(null);
+    if (raw == null) return;
+    if (!filter.includeZero() && raw.signum() <= 0) return;
+
+    Double usdPrice = usdPriceSupplier != null ? usdPriceSupplier.get() : null;
+
+    final int decimals = 18;
+    String balance = formatUnits(raw, decimals);
+    Double usdValue = null;
+    if (usdPrice != null && Double.isFinite(usdPrice) && usdPrice > 0 && balance != null) {
+      try {
+        BigDecimal b = new BigDecimal(balance);
+        BigDecimal p = BigDecimal.valueOf(usdPrice);
+        BigDecimal v = b.multiply(p);
+        usdValue = v.doubleValue();
+      } catch (Exception ignored) {
+        usdValue = null;
+      }
+    }
+
+    if (usdValue != null && usdValue > 0 && usdValue < filter.minUsd()) {
+      return;
+    }
+
+    String logoUrl = buildTrustWalletAssetLogoUrl(56, contract);
+    if (logoUrl == null) {
+      logoUrl = buildTrustWalletChainLogoUrl(56);
+    }
+
+    PortfolioAssetSnapshotV2 next =
+        new PortfolioAssetSnapshotV2(
+            56,
+            "bsc",
+            false,
+            contract,
+            symbol,
+            name,
+            decimals,
+            raw.toString(),
+            balance,
+            usdPrice,
+            usdValue,
+            logoUrl,
+            null);
+
+    Integer idx = idxByContractLower.get(contract.toLowerCase(Locale.ROOT));
+    if (idx != null && idx >= 0 && idx < assets.size()) {
+      assets.set(idx, next);
+      return;
+    }
+
+    idxByContractLower.put(contract.toLowerCase(Locale.ROOT), assets.size());
+    assets.add(next);
+  }
+
+  private Optional<BigInteger> fetchBscErc20BalanceRaw(String tokenContract, String owner) {
+    if (bscWeb3j.isEmpty()) return Optional.empty();
+    String contract = normalizeBlankToNull(tokenContract);
+    String address = normalizeBlankToNull(owner);
+    if (contract == null || address == null) return Optional.empty();
+    if (!EVM_ADDRESS.matcher(contract).matches()) return Optional.empty();
+    if (!EVM_ADDRESS.matcher(address).matches()) return Optional.empty();
+
+    try {
+      Function fn =
+          new Function(
+              "balanceOf",
+              List.of(new Address(address)),
+              List.of(new TypeReference<Uint256>() {}));
+      String data = FunctionEncoder.encode(fn);
+      Transaction tx = Transaction.createEthCallTransaction(null, contract, data);
+      EthCall resp =
+          bscWeb3j.get().ethCall(tx, DefaultBlockParameterName.LATEST).send();
+      if (resp == null || resp.hasError()) {
+        return Optional.empty();
+      }
+      @SuppressWarnings("rawtypes")
+      List<Type> decoded =
+          FunctionReturnDecoder.decode(resp.getValue(), fn.getOutputParameters());
+      if (decoded == null || decoded.isEmpty()) return Optional.empty();
+      Uint256 v = (Uint256) decoded.get(0);
+      return Optional.ofNullable(v.getValue());
+    } catch (Exception e) {
+      log.warn(
+          "bsc erc20 balanceOf failed: token={} address={}", tokenContract, owner, e);
+      return Optional.empty();
+    }
   }
 
   private Optional<Double> fetchTotalBalanceUsdMultiChain(String address, List<Integer> chainIds) {
@@ -521,21 +807,109 @@ public class PortfolioAggregatorService {
     return a;
   }
 
-  private List<Integer> normalizeChainIds(List<Integer> requestedChainIds) {
-    List<Integer> source =
-        requestedChainIds == null || requestedChainIds.isEmpty()
-            ? defaultChainIds
-            : requestedChainIds;
+  private List<Integer> normalizeChainIds(List<Integer> requestedChainIds, boolean fallbackToDefaultWhenEmpty) {
+    List<Integer> source = requestedChainIds == null ? List.of() : requestedChainIds;
+    if (source.isEmpty() && fallbackToDefaultWhenEmpty) {
+      source = defaultChainIds;
+    }
     List<Integer> out = new ArrayList<>();
     for (Integer id : source) {
       if (id == null) continue;
       if (!SUPPORTED_CHAINS.containsKey(id)) continue;
       if (!out.contains(id)) out.add(id);
     }
-    if (out.isEmpty()) {
+    if (out.isEmpty() && fallbackToDefaultWhenEmpty) {
       out.addAll(defaultChainIds.isEmpty() ? List.of(1, 10, 56, 8453, 42161) : defaultChainIds);
     }
     return out;
+  }
+
+  private List<PortfolioChainSummary> buildPortfolioChainSummaries(
+      List<Integer> chainIds, PortfolioSnapshotV2 snapshot) {
+    if (chainIds == null || chainIds.isEmpty()) return List.of();
+
+    Map<Integer, ChainSummaryAccumulator> accByChainId = new LinkedHashMap<>();
+    for (Integer chainId : chainIds) {
+      if (chainId == null) continue;
+      ChainMeta meta = SUPPORTED_CHAINS.get(chainId);
+      String blockchain = meta != null ? meta.blockchain() : "unknown";
+      String nativeSymbol = meta != null ? meta.nativeSymbol() : "";
+      accByChainId.put(chainId, new ChainSummaryAccumulator(blockchain, nativeSymbol));
+    }
+
+    if (snapshot != null && snapshot.assets() != null) {
+      for (PortfolioAssetSnapshotV2 asset : snapshot.assets()) {
+        if (asset == null) continue;
+        ChainSummaryAccumulator acc = accByChainId.get(asset.chainId());
+        if (acc == null) continue;
+
+        String blockchain = normalizeBlankToNull(asset.blockchain());
+        if (blockchain != null) acc.blockchain = blockchain;
+
+        if (asset.isNative()) {
+          String nativeBalance = normalizeBlankToNull(asset.balance());
+          if (nativeBalance != null) acc.nativeBalance = nativeBalance;
+
+          Double nativeUsdPrice = positiveOrNull(asset.usdPrice());
+          if (nativeUsdPrice != null) acc.nativeUsdPrice = nativeUsdPrice;
+
+          Double nativeUsdValue = positiveOrNull(asset.usdValue());
+          if (nativeUsdValue != null) {
+            acc.nativeUsdValue = (acc.nativeUsdValue == null ? 0d : acc.nativeUsdValue) + nativeUsdValue;
+          }
+          continue;
+        }
+
+        acc.tokenCount += 1;
+        Double tokenUsdPrice = positiveOrNull(asset.usdPrice());
+        if (tokenUsdPrice != null) acc.pricedTokenCount += 1;
+
+        Double tokenUsdValue = positiveOrNull(asset.usdValue());
+        if (tokenUsdValue != null) acc.tokenUsdValue += tokenUsdValue;
+      }
+    }
+
+    List<PortfolioChainSummary> out = new ArrayList<>();
+    for (Integer chainId : chainIds) {
+      ChainSummaryAccumulator acc = accByChainId.get(chainId);
+      if (acc == null) continue;
+
+      Double nativeUsdPrice = positiveOrNull(acc.nativeUsdPrice);
+      Double nativeUsdValue = positiveOrNull(acc.nativeUsdValue);
+      Double tokenUsdValue = acc.tokenUsdValue > 0 ? round2(acc.tokenUsdValue) : null;
+      double totalUsdRaw = (nativeUsdValue != null ? nativeUsdValue : 0d) + (tokenUsdValue != null ? tokenUsdValue : 0d);
+
+      out.add(
+          new PortfolioChainSummary(
+              chainId,
+              acc.blockchain,
+              acc.nativeSymbol,
+              acc.nativeBalance,
+              nativeUsdPrice,
+              nativeUsdValue != null ? round2(nativeUsdValue) : null,
+              tokenUsdValue,
+              round2(totalUsdRaw),
+              acc.tokenCount,
+              acc.pricedTokenCount));
+    }
+    return out;
+  }
+
+  private static Double positiveOrNull(Double value) {
+    if (value == null || !Double.isFinite(value) || value <= 0d) return null;
+    return value;
+  }
+
+  private static double sumChainTotals(List<PortfolioChainSummary> chains) {
+    if (chains == null || chains.isEmpty()) return 0d;
+    double sum = 0d;
+    for (PortfolioChainSummary chain : chains) {
+      if (chain == null || chain.totalUsd() == null) continue;
+      Double total = chain.totalUsd();
+      if (total == null || !Double.isFinite(total) || total <= 0d) continue;
+      sum += total;
+    }
+    return sum;
   }
 
   private static double round2(double value) {
@@ -562,6 +936,22 @@ public class PortfolioAggregatorService {
       return sb.toString();
     } catch (Exception e) {
       return Integer.toHexString(input.hashCode());
+    }
+  }
+
+  private static final class ChainSummaryAccumulator {
+    private String blockchain;
+    private final String nativeSymbol;
+    private String nativeBalance = "0";
+    private Double nativeUsdPrice;
+    private Double nativeUsdValue;
+    private double tokenUsdValue;
+    private int tokenCount;
+    private int pricedTokenCount;
+
+    private ChainSummaryAccumulator(String blockchain, String nativeSymbol) {
+      this.blockchain = blockchain;
+      this.nativeSymbol = nativeSymbol;
     }
   }
 

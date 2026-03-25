@@ -7,6 +7,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import io.statusmvp.pricebackend.model.PortfolioSnapshot;
+import io.statusmvp.pricebackend.model.PortfolioSnapshotV2;
 import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
@@ -52,8 +53,17 @@ class PortfolioAggregatorServiceTest {
   void getPortfolioReturnsZeroWhenDataUnavailable() {
     PortfolioSnapshot snapshot = service.getPortfolio(VALID_ADDRESS, List.of(56, 56, 999, 8453));
     assertEquals(VALID_ADDRESS, snapshot.address());
-    assertEquals(0, snapshot.chains().size());
+    assertEquals(2, snapshot.chains().size());
     assertEquals(0.0, snapshot.totalUsd());
     assertTrue(snapshot.fetchedAt() > 0);
+  }
+
+  @Test
+  void explicitUnsupportedChainIdsDoNotFallbackToDefaultForV2() {
+    PortfolioSnapshotV2 snapshot =
+        service.getPortfolioSnapshotV2(VALID_ADDRESS, List.of(97, 11155111), "usd", 0.01d, false, 200, true);
+    assertEquals(VALID_ADDRESS, snapshot.address());
+    assertEquals(0, snapshot.assets().size());
+    assertEquals(0.0, snapshot.totalUsd());
   }
 }

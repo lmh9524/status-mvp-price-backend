@@ -14,6 +14,7 @@ import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import org.slf4j.Logger;
@@ -28,6 +29,41 @@ public class AcrossBridgeDirectoryService {
 
   private static final String CACHE_KEY_CHAINS = "bridge:across:chains";
   private static final String CACHE_KEY_ROUTES = "bridge:across:available-routes";
+
+  // P0: Across directory currently returns logoUrl pointing at across-protocol/frontend raw GitHub paths, which are
+  // widely 404 (repo is not public). Override chain logos to known-good public sources and drop dead upstream URLs.
+  private static final String TRUSTWALLET_CDN_BLOCKCHAINS =
+      "https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains/";
+  private static final String LLAMA_CHAIN_ICON_BASE = "https://icons.llamao.fi/icons/chains/";
+  private static final Map<Long, String> CHAIN_LOGO_OVERRIDE_BY_ID =
+      Map.ofEntries(
+          // TrustWallet (chain logos)
+          Map.entry(1L, TRUSTWALLET_CDN_BLOCKCHAINS + "ethereum/info/logo.png"),
+          Map.entry(10L, TRUSTWALLET_CDN_BLOCKCHAINS + "optimism/info/logo.png"),
+          Map.entry(56L, TRUSTWALLET_CDN_BLOCKCHAINS + "smartchain/info/logo.png"),
+          Map.entry(137L, TRUSTWALLET_CDN_BLOCKCHAINS + "polygon/info/logo.png"),
+          Map.entry(42161L, TRUSTWALLET_CDN_BLOCKCHAINS + "arbitrum/info/logo.png"),
+          Map.entry(324L, TRUSTWALLET_CDN_BLOCKCHAINS + "zksync/info/logo.png"),
+          Map.entry(8453L, TRUSTWALLET_CDN_BLOCKCHAINS + "base/info/logo.png"),
+          Map.entry(59144L, TRUSTWALLET_CDN_BLOCKCHAINS + "linea/info/logo.png"),
+          Map.entry(4326L, TRUSTWALLET_CDN_BLOCKCHAINS + "megaeth/info/logo.png"),
+          Map.entry(534352L, TRUSTWALLET_CDN_BLOCKCHAINS + "scroll/info/logo.png"),
+          Map.entry(143L, TRUSTWALLET_CDN_BLOCKCHAINS + "monad/info/logo.png"),
+          Map.entry(9745L, TRUSTWALLET_CDN_BLOCKCHAINS + "plasma/info/logo.png"),
+          // Across uses a non-EVM chainId for Solana; chain logo still lives under TrustWallet's solana folder.
+          Map.entry(34268394551451L, TRUSTWALLET_CDN_BLOCKCHAINS + "solana/info/logo.png"),
+
+          // Llama (chain logos) for chains missing from TrustWallet assets repo
+          Map.entry(34443L, LLAMA_CHAIN_ICON_BASE + "rsz_mode.jpg"),
+          Map.entry(81457L, LLAMA_CHAIN_ICON_BASE + "rsz_blast.jpg"),
+          Map.entry(1135L, LLAMA_CHAIN_ICON_BASE + "rsz_lisk.jpg"),
+          Map.entry(7777777L, LLAMA_CHAIN_ICON_BASE + "rsz_zora.jpg"),
+          Map.entry(480L, LLAMA_CHAIN_ICON_BASE + "rsz_worldchain.png"),
+          Map.entry(57073L, LLAMA_CHAIN_ICON_BASE + "rsz_ink.jpg"),
+          Map.entry(1868L, LLAMA_CHAIN_ICON_BASE + "rsz_soneium.jpg"),
+          Map.entry(130L, LLAMA_CHAIN_ICON_BASE + "rsz_unichain.jpg"),
+          Map.entry(232L, LLAMA_CHAIN_ICON_BASE + "rsz_lens.jpg"),
+          Map.entry(999L, LLAMA_CHAIN_ICON_BASE + "rsz_hyperevm.jpg"));
 
   private enum AllowlistMode {
     STRICT,
@@ -140,7 +176,8 @@ public class AcrossBridgeDirectoryService {
       String name = chain.path("name").asText(null);
       String publicRpcUrl = chain.path("publicRpcUrl").asText(null);
       String explorerUrl = chain.path("explorerUrl").asText(null);
-      String logoUrl = chain.path("logoUrl").asText(null);
+      String logoUrl = sanitizeUpstreamLogoUrl(chain.path("logoUrl").asText(null));
+      logoUrl = resolveChainLogoUrl(chainId, logoUrl);
       String spokePool = chain.path("spokePool").asText(null);
       Long spokePoolBlock =
           chain.path("spokePoolBlock").isNumber() ? chain.path("spokePoolBlock").asLong() : null;
@@ -252,7 +289,7 @@ public class AcrossBridgeDirectoryService {
       String address = t.path("address").asText(null);
       String name = t.path("name").asText(null);
       int decimals = t.path("decimals").asInt(0);
-      String logoUrl = t.path("logoUrl").asText(null);
+      String logoUrl = sanitizeUpstreamLogoUrl(t.path("logoUrl").asText(null));
       if (decimals <= 0) continue;
       if (address == null || address.isBlank()) continue;
       out.add(new Token(address, symbol, name, decimals, logoUrl));
@@ -294,5 +331,29 @@ public class AcrossBridgeDirectoryService {
   private static String upper(String raw) {
     if (raw == null) return "";
     return raw.trim().toUpperCase(Locale.ROOT);
+  }
+
+  private static String normalizeBlankToNull(String raw) {
+    if (raw == null) return null;
+    String trimmed = raw.trim();
+    return trimmed.isEmpty() ? null : trimmed;
+  }
+
+  private static String sanitizeUpstreamLogoUrl(String raw) {
+    String trimmed = normalizeBlankToNull(raw);
+    if (trimmed == null) return null;
+    String lower = trimmed.toLowerCase(Locale.ROOT);
+    // Across upstream currently points to a non-public GitHub repo, yielding 404s in clients.
+    if (lower.contains("raw.githubusercontent.com/across-protocol/frontend")
+        || lower.contains("cdn.jsdelivr.net/gh/across-protocol/frontend")) {
+      return null;
+    }
+    return trimmed;
+  }
+
+  private static String resolveChainLogoUrl(long chainId, String upstreamLogoUrl) {
+    String override = CHAIN_LOGO_OVERRIDE_BY_ID.get(chainId);
+    if (override != null) return override;
+    return upstreamLogoUrl;
   }
 }
