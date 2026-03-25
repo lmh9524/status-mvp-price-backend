@@ -123,6 +123,10 @@ public class AuthJwtService {
       if (expires == null || expires.before(new Date())) {
         throw new AuthException(AuthErrorCode.ACCESS_TOKEN_EXPIRED, "access token expired", 401);
       }
+      Date issuedAt = claims.getIssueTime();
+      if (issuedAt == null) {
+        throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "invalid access token", 401);
+      }
       String subject = claims.getSubject();
       if (subject == null || subject.isBlank()) {
         throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "invalid access token", 401);
@@ -132,7 +136,11 @@ public class AuthJwtService {
         throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "invalid access token type", 401);
       }
       String jti = claims.getJWTID();
-      return new AccessTokenClaims(subject, jti, expires.toInstant().getEpochSecond());
+      return new AccessTokenClaims(
+          subject,
+          jti,
+          issuedAt.toInstant().toEpochMilli(),
+          expires.toInstant().toEpochMilli());
     } catch (AuthException e) {
       throw e;
     } catch (Exception e) {
@@ -275,5 +283,5 @@ public class AuthJwtService {
     return out.toByteArray();
   }
 
-  public record AccessTokenClaims(String walletSub, String jti, long expEpochSeconds) {}
+  public record AccessTokenClaims(String walletSub, String jti, long issuedAtEpochMs, long expEpochMs) {}
 }

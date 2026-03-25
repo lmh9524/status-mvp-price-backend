@@ -400,6 +400,14 @@ public class AuthController {
         .subscribeOn(Schedulers.boundedElastic());
   }
 
+  @PostMapping(path = "/api/v1/auth/account/delete", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.DeleteAccountResponse> deleteAccount(
+      @RequestHeader("Authorization") String authorizationHeader,
+      @RequestBody(required = false) AuthDtos.DeleteAccountRequest request) {
+    return Mono.fromCallable(() -> authService.deleteAccount(authorizationHeader, request))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
   @PostMapping(path = "/api/v1/auth/providers/bind", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.MeResponse> bind(
       @RequestHeader("Authorization") String authorizationHeader,

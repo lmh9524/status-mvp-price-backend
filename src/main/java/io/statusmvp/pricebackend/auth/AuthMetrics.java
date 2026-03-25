@@ -53,9 +53,18 @@ public class AuthMetrics {
     meterRegistry.counter("auth.sync.error", "reason", reason).increment();
   }
 
+  public void deleteSuccess() {
+    if (!authProperties.isMetricsEnabled()) return;
+    meterRegistry.counter("auth.delete.success").increment();
+  }
+
+  public void deleteFailure(String reason) {
+    if (!authProperties.isMetricsEnabled()) return;
+    meterRegistry.counter("auth.delete.failure", "reason", reason).increment();
+  }
+
   public void rateLimited(String scope) {
     if (!authProperties.isMetricsEnabled()) return;
     meterRegistry.counter("auth.rate_limited", "scope", scope).increment();
   }
 }
-

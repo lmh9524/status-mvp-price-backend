@@ -775,6 +775,53 @@ public class AuthService {
     return new AuthDtos.MeResponse(walletSub, providers);
   }
 
+  public AuthDtos.DeleteAccountResponse deleteAccount(
+      String authorizationHeader, AuthDtos.DeleteAccountRequest request) {
+    ensureAuthEnabled();
+    AuthJwtService.AccessTokenClaims claims = requireActiveAccessTokenClaims(authorizationHeader);
+    String walletSub = claims.walletSub();
+    long deletedAt = now();
+    long tombstoneTtlSeconds = Math.max(300, authProperties.getAccessTokenTtlSeconds() + 60L);
+    try {
+      WalletProfile profile = store.getWalletProfile(walletSub).orElse(null);
+      int removedProviders = 0;
+      if (profile != null) {
+        for (String providerSub : profile.providers().keySet()) {
+          if (!StringUtils.hasText(providerSub)) continue;
+          store.unbindProviderSub(providerSub);
+          removedProviders++;
+        }
+      }
+
+      String requestedRefreshToken = emptyToNull(request == null ? null : request.refreshToken());
+      boolean refreshTokenRevoked = false;
+      if (requestedRefreshToken != null) {
+        String tokenHash = jwtService.sha256Hex(requestedRefreshToken);
+        refreshTokenRevoked =
+            store.getRefreshTokenByHash(tokenHash).map(RefreshTokenRecord::walletSub).filter(walletSub::equals).isPresent();
+      }
+
+      store.markWalletDeleted(walletSub, deletedAt, tombstoneTtlSeconds);
+      int revokedRefreshTokens = store.revokeAllRefreshTokensForWallet(walletSub);
+      store.deleteWalletProfile(walletSub);
+
+      log.info(
+          "account deleted: walletSub={}, removedProviders={}, revokedRefreshTokens={}, refreshTokenRevoked={}",
+          walletSub,
+          removedProviders,
+          revokedRefreshTokens,
+          refreshTokenRevoked);
+      metrics.deleteSuccess();
+      return new AuthDtos.DeleteAccountResponse(walletSub, removedProviders, refreshTokenRevoked);
+    } catch (AuthException e) {
+      metrics.deleteFailure(e.getCode().name());
+      throw e;
+    } catch (RuntimeException e) {
+      metrics.deleteFailure("unknown");
+      throw e;
+    }
+  }
+
   public AuthDtos.MeResponse bindProvider(String authorizationHeader, AuthDtos.BindRequest request, String deviceId) {
     ensureAuthEnabled();
     ensureBindEnabled();
@@ -1236,10 +1283,18 @@ public class AuthService {
     }
   }
 
-  private String requireWalletSubFromAccessToken(String authorizationHeader) {
+  private AuthJwtService.AccessTokenClaims requireActiveAccessTokenClaims(String authorizationHeader) {
     String token = extractBearerToken(authorizationHeader);
     AuthJwtService.AccessTokenClaims claims = jwtService.verifyAccessToken(token);
-    return claims.walletSub();
+    Long deletedAt = store.getWalletDeletedAt(claims.walletSub()).orElse(null);
+    if (deletedAt != null && claims.issuedAtEpochMs() <= deletedAt) {
+      throw new AuthException(AuthErrorCode.ACCOUNT_DELETED, "account deleted", 401);
+    }
+    return claims;
+  }
+
+  private String requireWalletSubFromAccessToken(String authorizationHeader) {
+    return requireActiveAccessTokenClaims(authorizationHeader).walletSub();
   }
 
   private String extractBearerToken(String authorizationHeader) {

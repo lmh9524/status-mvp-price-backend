@@ -52,6 +52,10 @@ public final class AuthDtos {
 
   public record MeResponse(String walletSub, List<ProviderBinding> providers) {}
 
+  public record DeleteAccountRequest(String refreshToken) {}
+
+  public record DeleteAccountResponse(String walletSub, int removedProviders, boolean refreshTokenRevoked) {}
+
   public record BindRequest(@NotBlank String authCode) {}
 
   public record UnbindRequest(@NotBlank String providerSub) {}

@@ -34,6 +34,7 @@ Optional:
 - `POST /api/v1/auth/exchange`
 - `POST /api/v1/auth/refresh`
 - `GET /api/v1/auth/me`
+- `POST /api/v1/auth/account/delete`
 - `POST /api/v1/auth/providers/bind`
 - `POST /api/v1/auth/providers/unbind`
 - `GET /api/v1/auth/sync/dapps`
