@@ -94,4 +94,44 @@ class LegalControllerTest {
                     .contains("VeilLabs")
                     .contains("veillabs.wallet@gmail.com"));
   }
+
+  @Test
+  void supportReturnsRedirectWhenConfigured() {
+    given(legalProperties.getSupportUrl()).willReturn("https://vex.veilx.global/legal/support");
+
+    webTestClient
+        .get()
+        .uri("/support")
+        .exchange()
+        .expectStatus()
+        .isFound()
+        .expectHeader()
+        .valueEquals(HttpHeaders.LOCATION, "https://vex.veilx.global/legal/support");
+  }
+
+  @Test
+  void supportReturnsFallbackHtmlWhenUrlMissing() {
+    given(legalProperties.getSupportUrl()).willReturn("");
+    given(legalProperties.getAppName()).willReturn("Veil Wallet");
+    given(legalProperties.getEntityName()).willReturn("VeilLabs");
+    given(legalProperties.getContactEmail()).willReturn("veillabs.wallet@gmail.com");
+    given(legalProperties.getContactAddress()).willReturn("香港九龙区");
+
+    webTestClient
+        .get()
+        .uri("/support")
+        .exchange()
+        .expectStatus()
+        .isOk()
+        .expectHeader()
+        .contentType("text/html;charset=UTF-8")
+        .expectBody(String.class)
+        .value(
+            body ->
+                org.assertj.core.api.Assertions.assertThat(body)
+                    .contains("Support")
+                    .contains("Veil Wallet")
+                    .contains("VeilLabs")
+                    .contains("veillabs.wallet@gmail.com"));
+  }
 }

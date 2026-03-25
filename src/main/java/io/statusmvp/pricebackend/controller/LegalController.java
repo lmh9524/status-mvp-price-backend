@@ -29,6 +29,12 @@ public class LegalController {
         legalProperties.getPrivacyUrl(), LegalPageRenderer.renderPrivacyHtml(legalProperties));
   }
 
+  @GetMapping(value = "/support", produces = MediaType.TEXT_HTML_VALUE)
+  public ResponseEntity<String> support() {
+    return legalPage(
+        legalProperties.getSupportUrl(), LegalPageRenderer.renderSupportHtml(legalProperties));
+  }
+
   private ResponseEntity<String> legalPage(String redirectUrl, String fallbackHtml) {
     String url = redirectUrl == null ? "" : redirectUrl.trim();
     if (!url.isEmpty()) {

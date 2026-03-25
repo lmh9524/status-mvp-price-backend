@@ -136,6 +136,7 @@ app:
   legal:
     termsUrl: ${LEGAL_TERMS_URL:}
     privacyUrl: ${LEGAL_PRIVACY_URL:}
+    supportUrl: ${LEGAL_SUPPORT_URL:}
     appName: ${LEGAL_APP_NAME:Veil Wallet}
     entityName: ${LEGAL_ENTITY_NAME:VeilLabs}
     contactEmail: ${LEGAL_CONTACT_EMAIL:veillabs.wallet@gmail.com}
