@@ -13,6 +13,26 @@ app:
   cache:
     priceTtlSeconds: ${PRICE_CACHE_TTL_SECONDS:120}
     requestTtlSeconds: ${REQUEST_CACHE_TTL_SECONDS:30}
+  safe:
+    notifications:
+      enabled: ${SAFE_NOTIFICATIONS_ENABLED:true}
+      pollDelayMs: ${SAFE_NOTIFICATIONS_POLL_DELAY_MS:45000}
+      inboxLimit: ${SAFE_NOTIFICATIONS_INBOX_LIMIT:50}
+      pullDefaultLimit: ${SAFE_NOTIFICATIONS_PULL_DEFAULT_LIMIT:20}
+      queueTtlSeconds: ${SAFE_NOTIFICATIONS_QUEUE_TTL_SECONDS:1209600}
+      remote:
+        fcm:
+          enabled: ${APP_SAFE_NOTIFICATIONS_REMOTE_FCM_ENABLED:false}
+          projectId: ${APP_SAFE_NOTIFICATIONS_REMOTE_FCM_PROJECT_ID:}
+          clientEmail: ${APP_SAFE_NOTIFICATIONS_REMOTE_FCM_CLIENT_EMAIL:}
+          privateKeyPem: ${APP_SAFE_NOTIFICATIONS_REMOTE_FCM_PRIVATE_KEY_PEM:}
+        apns:
+          enabled: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_ENABLED:false}
+          teamId: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_TEAM_ID:}
+          keyId: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_KEY_ID:}
+          bundleId: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_BUNDLE_ID:com.veilwallet.app}
+          privateKeyPem: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_PRIVATE_KEY_PEM:}
+          useSandbox: ${APP_SAFE_NOTIFICATIONS_REMOTE_APNS_USE_SANDBOX:true}
   auth:
     enabled: ${AUTH_ENABLED:true}
     oneTimeCodeTtlSeconds: ${AUTH_ONE_TIME_CODE_TTL_SECONDS:60}
@@ -110,6 +130,17 @@ app:
     symbolIdOverrides: ${COINGECKO_SYMBOL_ID_OVERRIDES:}
   cors:
     allowedOrigins: ${CORS_ALLOWED_ORIGINS:*}
+  legal:
+    termsUrl: ${LEGAL_TERMS_URL:}
+    privacyUrl: ${LEGAL_PRIVACY_URL:}
+    supportUrl: ${LEGAL_SUPPORT_URL:}
+    appName: ${LEGAL_APP_NAME:Veil Wallet}
+    entityName: ${LEGAL_ENTITY_NAME:VeilLabs}
+    contactEmail: ${LEGAL_CONTACT_EMAIL:veillabs.wallet@gmail.com}
+    contactAddress: ${LEGAL_CONTACT_ADDRESS:香港九龙区}
+    effectiveDate: ${LEGAL_EFFECTIVE_DATE:2026-02-20}
+    governingLaw: ${LEGAL_GOVERNING_LAW:Laws of the Hong Kong Special Administrative Region}
+    governingLawZh: ${LEGAL_GOVERNING_LAW_ZH:香港特别行政区法律}
 
 logging:
   level:

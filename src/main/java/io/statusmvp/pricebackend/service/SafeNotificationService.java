@@ -11,6 +11,7 @@ import com.nimbusds.jwt.JWTClaimsSet;
 import com.nimbusds.jwt.SignedJWT;
 import io.statusmvp.pricebackend.model.safe.SafeCollaborationDtos;
 import io.statusmvp.pricebackend.model.safe.SafeNotificationDtos;
+import jakarta.annotation.PostConstruct;
 import java.net.URI;
 import java.net.URLEncoder;
 import java.net.http.HttpClient;
@@ -119,6 +120,32 @@ public class SafeNotificationService {
     this.apnsBundleId = normalizeToken(apnsBundleId);
     this.apnsPrivateKeyPem = normalizePem(apnsPrivateKeyPem);
     this.apnsUseSandbox = apnsUseSandbox;
+  }
+
+  @PostConstruct
+  void logConfigurationSummary() {
+    String fcmState = fcmConfigState();
+    String apnsState = apnsConfigState();
+    log.info(
+        "safe.notifications.config_summary pollingEnabled={} queueTtlSeconds={} inboxLimit={} pullDefaultLimit={} fcmState={} apnsState={}",
+        pollingEnabled,
+        queueTtlSeconds,
+        perDeviceInboxLimit,
+        pullDefaultLimit,
+        fcmState,
+        apnsState);
+    if (!"ready".equals(fcmState)) {
+      log.warn(
+          "safe.notifications.android_push_unavailable state={} fallbackTransport={}",
+          fcmState,
+          TRANSPORT_PULL_LOCAL);
+    }
+    if (!"ready".equals(apnsState)) {
+      log.warn(
+          "safe.notifications.ios_push_unavailable state={} fallbackTransport={}",
+          apnsState,
+          TRANSPORT_PULL_LOCAL);
+    }
   }
 
   public Mono<SafeNotificationDtos.RegisterResponse> register(
@@ -487,12 +514,47 @@ public class SafeNotificationService {
         && !fcmPrivateKeyPem.isBlank();
   }
 
+  private String fcmConfigState() {
+    if (!fcmEnabled) {
+      return "disabled_by_flag";
+    }
+    if (fcmProjectId.isBlank()) {
+      return "missing_project_id";
+    }
+    if (fcmClientEmail.isBlank()) {
+      return "missing_client_email";
+    }
+    if (fcmPrivateKeyPem.isBlank()) {
+      return "missing_private_key";
+    }
+    return "ready";
+  }
+
   private boolean isApnsConfigured() {
     return apnsEnabled
         && !apnsTeamId.isBlank()
         && !apnsKeyId.isBlank()
         && !apnsBundleId.isBlank()
         && !apnsPrivateKeyPem.isBlank();
+  }
+
+  private String apnsConfigState() {
+    if (!apnsEnabled) {
+      return "disabled_by_flag";
+    }
+    if (apnsTeamId.isBlank()) {
+      return "missing_team_id";
+    }
+    if (apnsKeyId.isBlank()) {
+      return "missing_key_id";
+    }
+    if (apnsBundleId.isBlank()) {
+      return "missing_bundle_id";
+    }
+    if (apnsPrivateKeyPem.isBlank()) {
+      return "missing_private_key";
+    }
+    return "ready";
   }
 
   private PushContent buildPushContent(NotificationRecord record) {
