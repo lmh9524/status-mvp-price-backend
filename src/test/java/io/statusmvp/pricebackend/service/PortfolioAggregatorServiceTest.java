@@ -12,7 +12,9 @@ import java.util.List;
 import java.util.Optional;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.web3j.protocol.Web3j;
 
 class PortfolioAggregatorServiceTest {
   private static final String VALID_ADDRESS = "0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045";
@@ -24,11 +26,17 @@ class PortfolioAggregatorServiceTest {
   void setUp() {
     cache = mock(RedisCache.class);
     when(cache.get(org.mockito.ArgumentMatchers.anyString())).thenReturn(Optional.empty());
+    @SuppressWarnings("unchecked")
+    ObjectProvider<Web3j> bscWeb3jProvider = mock(ObjectProvider.class);
+    when(bscWeb3jProvider.getIfAvailable()).thenReturn(null);
+    VeilxDexPriceService veilxDex = mock(VeilxDexPriceService.class);
 
     service =
         new PortfolioAggregatorService(
             WebClient.builder().build(),
             cache,
+            bscWeb3jProvider,
+            veilxDex,
             "https://rpc.ankr.com/multichain",
             "",
             30,
