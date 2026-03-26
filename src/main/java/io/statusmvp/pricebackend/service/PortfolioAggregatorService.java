@@ -335,7 +335,7 @@ public class PortfolioAggregatorService {
 
     List<PortfolioAssetSnapshotV2> out = new ArrayList<>();
     Map<Integer, Long> blockNumbersByChainId = new HashMap<>();
-    double fallbackTotal = 0d;
+    Map<String, Double> fallbackUsdByAssetKey = new HashMap<>();
 
     for (JsonNode asset : assets) {
       String blockchain = normalizeBlankToNull(asset.path("blockchain").asText(null));
@@ -343,7 +343,10 @@ public class PortfolioAggregatorService {
       Integer chainId = chainIdByBlockchain.get(blockchain.toLowerCase(Locale.ROOT));
       if (chainId == null || !chainIds.contains(chainId)) continue;
 
-      boolean isNative = asset.path("isNative").asBoolean(false);
+      String tokenType = normalizeBlankToNull(asset.path("tokenType").asText(null));
+      boolean isNative =
+          asset.path("isNative").asBoolean(false)
+              || (tokenType != null && tokenType.trim().equalsIgnoreCase("native"));
       String symbol = normalizeBlankToNull(asset.path("tokenSymbol").asText(null));
       if (symbol == null) continue;
       String name = normalizeBlankToNull(asset.path("tokenName").asText(null));
@@ -391,7 +394,14 @@ public class PortfolioAggregatorService {
       }
 
       if (usdValue != null && usdValue > 0) {
-        fallbackTotal += usdValue;
+        String key =
+            chainId
+                + ":"
+                + (isNative ? "native" : contract.toLowerCase(Locale.ROOT));
+        Double prev = fallbackUsdByAssetKey.get(key);
+        if (prev == null || usdValue > prev) {
+          fallbackUsdByAssetKey.put(key, usdValue);
+        }
       }
 
       out.add(
@@ -410,6 +420,12 @@ public class PortfolioAggregatorService {
               logoUrl,
               blockNumber));
     }
+    double fallbackTotal = 0d;
+    for (Double v : fallbackUsdByAssetKey.values()) {
+      if (v != null && Double.isFinite(v) && v > 0) {
+        fallbackTotal += v;
+      }
+    }
     out.sort(
         (a, b) -> {
           double av = a.usdValue() != null ? a.usdValue() : 0d;
@@ -422,13 +438,20 @@ public class PortfolioAggregatorService {
       out = new ArrayList<>(out.subList(0, filter.limit()));
     }
 
-    double finalTotal = totalUsd != null ? totalUsd : fallbackTotal;
+    double finalTotal;
+    if (totalUsd != null && Double.isFinite(totalUsd) && totalUsd >= 0d) {
+      double upstreamRounded = round2(totalUsd);
+      double fallbackRounded = round2(fallbackTotal);
+      finalTotal = Math.max(upstreamRounded, fallbackRounded);
+    } else {
+      finalTotal = round2(fallbackTotal);
+    }
     return Optional.of(
         new PortfolioSnapshotV2(
             address,
             now,
             currency,
-            round2(finalTotal),
+            finalTotal,
             Map.copyOf(blockNumbersByChainId),
             out));
   }
