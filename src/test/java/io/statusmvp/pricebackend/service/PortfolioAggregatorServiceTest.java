@@ -3,9 +3,14 @@ package io.statusmvp.pricebackend.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import io.statusmvp.pricebackend.model.PortfolioAssetSnapshotV2;
+import io.statusmvp.pricebackend.model.PriceQuote;
 import io.statusmvp.pricebackend.model.PortfolioSnapshot;
 import io.statusmvp.pricebackend.model.PortfolioSnapshotV2;
 import java.util.List;
@@ -21,6 +26,7 @@ class PortfolioAggregatorServiceTest {
 
   private RedisCache cache;
   private PortfolioAggregatorService service;
+  private PriceAggregatorService priceAggregator;
 
   @BeforeEach
   void setUp() {
@@ -30,6 +36,11 @@ class PortfolioAggregatorServiceTest {
     ObjectProvider<Web3j> bscWeb3jProvider = mock(ObjectProvider.class);
     when(bscWeb3jProvider.getIfAvailable()).thenReturn(null);
     VeilxDexPriceService veilxDex = mock(VeilxDexPriceService.class);
+    priceAggregator = mock(PriceAggregatorService.class);
+    when(priceAggregator.getPricesByContract(org.mockito.ArgumentMatchers.anyInt(), anyList(), org.mockito.ArgumentMatchers.anyString()))
+        .thenReturn(List.of());
+    when(priceAggregator.getPrices(anyList(), org.mockito.ArgumentMatchers.anyString()))
+        .thenReturn(List.of());
 
     service =
         new PortfolioAggregatorService(
@@ -37,6 +48,7 @@ class PortfolioAggregatorServiceTest {
             cache,
             bscWeb3jProvider,
             veilxDex,
+            priceAggregator,
             "https://rpc.ankr.com/multichain",
             "",
             30,
@@ -73,5 +85,55 @@ class PortfolioAggregatorServiceTest {
     assertEquals(VALID_ADDRESS, snapshot.address());
     assertEquals(0, snapshot.assets().size());
     assertEquals(0.0, snapshot.totalUsd());
+  }
+
+  @Test
+  void backfillMissingUsdDataUsesSymbolFallbackForNativeAndStableAssets() {
+    when(priceAggregator.getPrices(anyList(), eq("usd")))
+        .thenReturn(
+            List.of(
+                new PriceQuote("BNB", 600d, "usd", 1L, "mock", null, null),
+                new PriceQuote("USDT", 1d, "usd", 1L, "stablecoin_fallback", null, null)));
+
+    List<PortfolioAssetSnapshotV2> enriched =
+        service.backfillMissingUsdData(
+            List.of(
+                new PortfolioAssetSnapshotV2(
+                    56,
+                    "bsc",
+                    true,
+                    null,
+                    "BNB",
+                    "BNB",
+                    18,
+                    "1000000000000000000",
+                    "1",
+                    null,
+                    null,
+                    null,
+                    null),
+                new PortfolioAssetSnapshotV2(
+                    56,
+                    "bsc",
+                    false,
+                    "0x55d398326f99059ff775485246999027b3197955",
+                    "USD₮",
+                    "Tether USD",
+                    18,
+                    "1140340000000000000",
+                    "1.14034",
+                    null,
+                    null,
+                    null,
+                    null)),
+            "usd");
+
+    assertEquals(600d, enriched.get(0).usdPrice(), 0.000001d);
+    assertEquals(600d, enriched.get(0).usdValue(), 0.000001d);
+    assertEquals(1d, enriched.get(1).usdPrice(), 0.000001d);
+    assertEquals(1.14034d, enriched.get(1).usdValue(), 0.000001d);
+
+    verify(priceAggregator).getPricesByContract(eq(56), anyList(), eq("usd"));
+    verify(priceAggregator).getPrices(anyList(), eq("usd"));
   }
 }
