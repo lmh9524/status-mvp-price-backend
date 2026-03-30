@@ -6,6 +6,7 @@ import java.util.Optional;
 import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.MediaType;
 import org.springframework.stereotype.Service;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -23,6 +24,7 @@ public class AndroidUpdateManifestService {
 
   private volatile CachedManifest cachedManifest;
 
+  @Autowired
   public AndroidUpdateManifestService(
       WebClient webClient, ObjectMapper objectMapper, AppUpdateProperties properties) {
     this(webClient, objectMapper, properties, Clock.systemUTC());

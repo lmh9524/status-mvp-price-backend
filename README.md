@@ -5,6 +5,7 @@
 它目前承载以下能力：
 
 - 代币价格聚合与投资组合接口
+- Android 应用版本更新检查接口
 - Across 支持链路目录代理
 - Solana Jupiter Quote / Swap 代理
 - 社交登录、SIWE、应用 JWT、DApp 同步
@@ -80,6 +81,19 @@ mvn spring-boot:run
 4. 稳定币兜底
 5. VEILX 链上定价
 
+### Android App 更新检查
+
+- `GET /api/v1/app/android/update`
+
+用于给 Android 客户端返回最新版本、最低支持版本、是否强更、APK 下载地址和校验信息。
+
+推荐接法：
+
+1. 用移动端仓库里的 `scripts/publish-android-update.js` 生成 `android-update.json` 和 APK 发布产物
+2. 把 `android-update.json` 与 APK 挂到 HTTPS 静态地址
+3. 在后端配置 `APP_UPDATE_ANDROID_MANIFEST_URL`
+4. 客户端请求 `/api/v1/app/android/update?versionCode=...&packageName=...&channel=official`
+
 ### Across 桥接目录
 
 - `GET /api/v1/bridge/across/directory`
@@ -151,6 +165,25 @@ mvn spring-boot:run
 - `COINGECKO_SYMBOL_ID_OVERRIDES`
 - `BSC_RPC_URL`
 - `VEILX_CONTRACT_ADDRESS`
+
+### App 更新
+
+- `APP_UPDATE_ANDROID_ENABLED`
+- `APP_UPDATE_ANDROID_CHANNEL`
+- `APP_UPDATE_ANDROID_PACKAGE_NAME`
+- `APP_UPDATE_ANDROID_MANIFEST_URL`
+- `APP_UPDATE_ANDROID_MANIFEST_CACHE_TTL_SECONDS`
+- `APP_UPDATE_ANDROID_LATEST_VERSION_CODE`
+- `APP_UPDATE_ANDROID_LATEST_VERSION_NAME`
+- `APP_UPDATE_ANDROID_MIN_SUPPORTED_VERSION_CODE`
+- `APP_UPDATE_ANDROID_REQUIRED`
+- `APP_UPDATE_ANDROID_DOWNLOAD_URL`
+- `APP_UPDATE_ANDROID_SHA256`
+- `APP_UPDATE_ANDROID_FILE_SIZE_BYTES`
+- `APP_UPDATE_ANDROID_RELEASE_NOTES`
+- `APP_UPDATE_ANDROID_PUBLISHED_AT`
+
+推荐优先使用 `APP_UPDATE_ANDROID_MANIFEST_URL`。如果它为空，后端会退回读取内联的 `APP_UPDATE_ANDROID_*` 版本字段。
 
 ### Across / Jupiter
 
