@@ -6,6 +6,8 @@ import io.statusmvp.pricebackend.model.PortfolioAssetSnapshotV2;
 import io.statusmvp.pricebackend.model.PortfolioChainSummary;
 import io.statusmvp.pricebackend.model.PortfolioSnapshot;
 import io.statusmvp.pricebackend.model.PortfolioSnapshotV2;
+import io.statusmvp.pricebackend.model.PriceQuote;
+import io.statusmvp.pricebackend.util.PriceMappings;
 import java.math.BigDecimal;
 import java.math.BigInteger;
 import java.net.URI;
@@ -46,6 +48,8 @@ public class PortfolioAggregatorService {
   private static final Logger log = LoggerFactory.getLogger(PortfolioAggregatorService.class);
 
   private static final Pattern EVM_ADDRESS = Pattern.compile("^0x[0-9a-fA-F]{40}$");
+  private static final Pattern STABLE_WITH_SUFFIX_DIGITS =
+      Pattern.compile("^(USDC|USDT|DAI|BUSD|TUSD|USDP|GUSD|FRAX|LUSD|SUSD|USDD|USDG|PYUSD|FDUSD|USDE)\\d+$");
   private static final int V1_SUMMARY_SNAPSHOT_LIMIT = 1000;
 
   private static final Map<Integer, ChainMeta> SUPPORTED_CHAINS =
@@ -95,6 +99,7 @@ public class PortfolioAggregatorService {
 
   private final Optional<Web3j> bscWeb3j;
   private final VeilxDexPriceService veilxDex;
+  private final PriceAggregatorService priceAggregator;
 
   private final String ankrBaseUrl;
   private final String ankrApiKey;
@@ -107,6 +112,7 @@ public class PortfolioAggregatorService {
       RedisCache cache,
       ObjectProvider<Web3j> bscWeb3jProvider,
       VeilxDexPriceService veilxDex,
+      PriceAggregatorService priceAggregator,
       @Value("${app.portfolio.ankrBaseUrl:https://rpc.ankr.com/multichain}") String ankrBaseUrl,
       @Value(
               "${app.portfolio.ankrApiKey:8ab456e0616fa58794745f952b83f719e7ea3af2d0c9cbac69b8f22323563de7}")
@@ -118,6 +124,7 @@ public class PortfolioAggregatorService {
     this.cache = cache;
     this.bscWeb3j = Optional.ofNullable(bscWeb3jProvider.getIfAvailable());
     this.veilxDex = veilxDex;
+    this.priceAggregator = priceAggregator;
     this.ankrBaseUrl = (ankrBaseUrl == null ? "" : ankrBaseUrl.trim()).replaceAll("/+$", "");
     this.ankrApiKey = ankrApiKey == null ? "" : ankrApiKey.trim();
     this.requestTtlSeconds = requestTtlSeconds;
@@ -335,7 +342,6 @@ public class PortfolioAggregatorService {
 
     List<PortfolioAssetSnapshotV2> out = new ArrayList<>();
     Map<Integer, Long> blockNumbersByChainId = new HashMap<>();
-    Map<String, Double> fallbackUsdByAssetKey = new HashMap<>();
 
     for (JsonNode asset : assets) {
       String blockchain = normalizeBlankToNull(asset.path("blockchain").asText(null));
@@ -393,17 +399,6 @@ public class PortfolioAggregatorService {
         }
       }
 
-      if (usdValue != null && usdValue > 0) {
-        String key =
-            chainId
-                + ":"
-                + (isNative ? "native" : contract.toLowerCase(Locale.ROOT));
-        Double prev = fallbackUsdByAssetKey.get(key);
-        if (prev == null || usdValue > prev) {
-          fallbackUsdByAssetKey.put(key, usdValue);
-        }
-      }
-
       out.add(
           new PortfolioAssetSnapshotV2(
               chainId,
@@ -420,6 +415,28 @@ public class PortfolioAggregatorService {
               logoUrl,
               blockNumber));
     }
+
+    out = backfillMissingUsdData(out, currency);
+
+    Map<String, Double> fallbackUsdByAssetKey = new HashMap<>();
+    for (PortfolioAssetSnapshotV2 asset : out) {
+      if (asset == null) continue;
+      Double usdValue = positiveOrNull(asset.usdValue());
+      if (usdValue == null) continue;
+      String key;
+      if (asset.isNative()) {
+        key = asset.chainId() + ":native";
+      } else {
+        String contract = normalizeBlankToNull(asset.contractAddress());
+        if (contract == null) continue;
+        key = asset.chainId() + ":" + contract.toLowerCase(Locale.ROOT);
+      }
+      Double prev = fallbackUsdByAssetKey.get(key);
+      if (prev == null || usdValue > prev) {
+        fallbackUsdByAssetKey.put(key, usdValue);
+      }
+    }
+
     double fallbackTotal = 0d;
     for (Double v : fallbackUsdByAssetKey.values()) {
       if (v != null && Double.isFinite(v) && v > 0) {
@@ -454,6 +471,135 @@ public class PortfolioAggregatorService {
             finalTotal,
             Map.copyOf(blockNumbersByChainId),
             out));
+  }
+
+  List<PortfolioAssetSnapshotV2> backfillMissingUsdData(
+      List<PortfolioAssetSnapshotV2> assets, String currency) {
+    if (assets == null || assets.isEmpty()) return assets == null ? List.of() : assets;
+    if (priceAggregator == null || !"usd".equals(normalizeCurrency(currency))) {
+      return assets;
+    }
+
+    Map<Integer, List<String>> contractAddressesByChainId = new LinkedHashMap<>();
+    List<String> symbolFallbacks = new ArrayList<>();
+
+    for (PortfolioAssetSnapshotV2 asset : assets) {
+      if (asset == null) continue;
+      if (positiveOrNull(asset.usdPrice()) != null && positiveOrNull(asset.usdValue()) != null) {
+        continue;
+      }
+
+      if (!asset.isNative()) {
+        String contract = normalizeBlankToNull(asset.contractAddress());
+        if (contract != null) {
+          String contractLower = contract.toLowerCase(Locale.ROOT);
+          List<String> list =
+              contractAddressesByChainId.computeIfAbsent(asset.chainId(), ignored -> new ArrayList<>());
+          if (!list.contains(contractLower)) {
+            list.add(contractLower);
+          }
+        }
+      }
+
+      String symbolKey = resolveSymbolFallbackKey(asset);
+      if (symbolKey != null && !symbolFallbacks.contains(symbolKey)) {
+        symbolFallbacks.add(symbolKey);
+      }
+    }
+
+    Map<String, Double> usdPriceByChainContract = new HashMap<>();
+    for (Map.Entry<Integer, List<String>> entry : contractAddressesByChainId.entrySet()) {
+      Integer chainId = entry.getKey();
+      List<String> contracts = entry.getValue();
+      if (chainId == null || contracts == null || contracts.isEmpty()) continue;
+      try {
+        List<PriceQuote> quotes = priceAggregator.getPricesByContract(chainId, contracts, "usd");
+        for (PriceQuote quote : quotes) {
+          if (quote == null) continue;
+          String contract = normalizeBlankToNull(quote.contractAddress());
+          Double price = positiveOrNull(quote.price());
+          if (contract == null || price == null) continue;
+          usdPriceByChainContract.put(
+              chainId + ":" + contract.toLowerCase(Locale.ROOT), price);
+        }
+      } catch (Exception e) {
+        log.warn("portfolio snapshot contract fallback pricing failed: chainId={}", chainId, e);
+      }
+    }
+
+    Map<String, Double> usdPriceBySymbol = new HashMap<>();
+    if (!symbolFallbacks.isEmpty()) {
+      try {
+        List<PriceQuote> quotes = priceAggregator.getPrices(symbolFallbacks, "usd");
+        for (PriceQuote quote : quotes) {
+          if (quote == null) continue;
+          String symbolKey = normalizeUsdLookupSymbol(quote.symbol());
+          Double price = positiveOrNull(quote.price());
+          if (symbolKey == null || price == null) continue;
+          usdPriceBySymbol.put(symbolKey, price);
+        }
+      } catch (Exception e) {
+        log.warn("portfolio snapshot symbol fallback pricing failed", e);
+      }
+    }
+
+    boolean changed = false;
+    List<PortfolioAssetSnapshotV2> out = new ArrayList<>(assets.size());
+    for (PortfolioAssetSnapshotV2 asset : assets) {
+      if (asset == null) continue;
+
+      Double usdPrice = positiveOrNull(asset.usdPrice());
+      Double usdValue = positiveOrNull(asset.usdValue());
+
+      if (usdPrice == null && !asset.isNative()) {
+        String contract = normalizeBlankToNull(asset.contractAddress());
+        if (contract != null) {
+          usdPrice =
+              positiveOrNull(
+                  usdPriceByChainContract.get(
+                      asset.chainId() + ":" + contract.toLowerCase(Locale.ROOT)));
+        }
+      }
+
+      if (usdPrice == null) {
+        String symbolKey = resolveSymbolFallbackKey(asset);
+        if (symbolKey != null) {
+          usdPrice = positiveOrNull(usdPriceBySymbol.get(symbolKey));
+        }
+      }
+
+      if (usdValue == null && usdPrice != null) {
+        usdValue = computeUsdValue(asset.balance(), usdPrice);
+      }
+
+      Double originalUsdPrice = positiveOrNull(asset.usdPrice());
+      Double originalUsdValue = positiveOrNull(asset.usdValue());
+      if (
+          equalsNullableDouble(originalUsdPrice, usdPrice)
+              && equalsNullableDouble(originalUsdValue, usdValue)) {
+        out.add(asset);
+        continue;
+      }
+
+      changed = true;
+      out.add(
+          new PortfolioAssetSnapshotV2(
+              asset.chainId(),
+              asset.blockchain(),
+              asset.isNative(),
+              asset.contractAddress(),
+              asset.symbol(),
+              asset.name(),
+              asset.decimals(),
+              asset.balanceRaw(),
+              asset.balance(),
+              usdPrice,
+              usdValue,
+              asset.logoUrl(),
+              asset.blockNumber()));
+    }
+
+    return changed ? out : assets;
   }
 
   private PortfolioSnapshotV2 augmentSnapshotV2WithVeilTokens(
@@ -921,6 +1067,48 @@ public class PortfolioAggregatorService {
   private static Double positiveOrNull(Double value) {
     if (value == null || !Double.isFinite(value) || value <= 0d) return null;
     return value;
+  }
+
+  private static boolean equalsNullableDouble(Double left, Double right) {
+    if (left == null || right == null) return left == right;
+    return Double.compare(left, right) == 0;
+  }
+
+  private static Double computeUsdValue(String balance, Double usdPrice) {
+    Double price = positiveOrNull(usdPrice);
+    String normalizedBalance = normalizeBlankToNull(balance);
+    if (price == null || normalizedBalance == null) return null;
+    try {
+      BigDecimal units = new BigDecimal(normalizedBalance);
+      if (units.signum() <= 0) return null;
+      return positiveOrNull(units.multiply(BigDecimal.valueOf(price)).doubleValue());
+    } catch (Exception ignored) {
+      return null;
+    }
+  }
+
+  private static String resolveSymbolFallbackKey(PortfolioAssetSnapshotV2 asset) {
+    if (asset == null) return null;
+    String symbolKey = normalizeUsdLookupSymbol(asset.symbol());
+    if (symbolKey == null) return null;
+    if (asset.isNative()) return symbolKey;
+    return PriceMappings.STABLECOINS.contains(symbolKey) ? symbolKey : null;
+  }
+
+  private static String normalizeUsdLookupSymbol(String raw) {
+    String normalized = normalizeBlankToNull(raw);
+    if (normalized == null) return null;
+    String symbol = normalized.toUpperCase(Locale.ROOT);
+    if (symbol.endsWith(".E")) {
+      symbol = symbol.substring(0, symbol.length() - 2);
+    }
+    if (symbol.indexOf('₮') >= 0) {
+      symbol = symbol.replace("₮", "T");
+    }
+    if (STABLE_WITH_SUFFIX_DIGITS.matcher(symbol).matches()) {
+      symbol = symbol.replaceAll("\\d+$", "");
+    }
+    return symbol.isBlank() ? null : symbol;
   }
 
   private static double sumChainTotals(List<PortfolioChainSummary> chains) {
