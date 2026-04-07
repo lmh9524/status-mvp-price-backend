@@ -13,6 +13,10 @@ app:
   cache:
     priceTtlSeconds: ${PRICE_CACHE_TTL_SECONDS:120}
     requestTtlSeconds: ${REQUEST_CACHE_TTL_SECONDS:30}
+  marketHistory:
+    bucketMinutes: ${MARKET_HISTORY_BUCKET_MINUTES:30}
+    searchWindowBuckets: ${MARKET_HISTORY_SEARCH_WINDOW_BUCKETS:4}
+    sampleTtlSeconds: ${MARKET_HISTORY_SAMPLE_TTL_SECONDS:259200}
   safe:
     notifications:
       enabled: ${SAFE_NOTIFICATIONS_ENABLED:true}

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import io.statusmvp.pricebackend.client.BinanceClient;
 import io.statusmvp.pricebackend.client.CoinGeckoClient;
 import io.statusmvp.pricebackend.client.CoinMarketCapClient;
+import io.statusmvp.pricebackend.model.PriceMarketData;
 import io.statusmvp.pricebackend.model.PriceQuote;
 import io.statusmvp.pricebackend.util.PriceMappings;
 import java.nio.charset.StandardCharsets;
@@ -28,6 +29,7 @@ public class PriceAggregatorService {
   private final RedisCache cache;
   private final CoinGeckoIdResolver coinGeckoIds;
   private final VeilxDexPriceService veilxDex;
+  private final PriceHistoryService priceHistory;
   private final ObjectMapper mapper = new ObjectMapper();
 
   private final long priceTtlSeconds;
@@ -46,6 +48,7 @@ public class PriceAggregatorService {
       RedisCache cache,
       CoinGeckoIdResolver coinGeckoIds,
       VeilxDexPriceService veilxDex,
+      PriceHistoryService priceHistory,
       @Value("${app.cache.priceTtlSeconds:120}") long priceTtlSeconds,
       @Value("${app.cache.requestTtlSeconds:30}") long requestTtlSeconds) {
     this.coinGecko = coinGecko;
@@ -54,6 +57,7 @@ public class PriceAggregatorService {
     this.cache = cache;
     this.coinGeckoIds = coinGeckoIds;
     this.veilxDex = veilxDex;
+    this.priceHistory = priceHistory;
     this.priceTtlSeconds = priceTtlSeconds;
     this.requestTtlSeconds = requestTtlSeconds;
   }
@@ -105,63 +109,101 @@ public class PriceAggregatorService {
       } catch (Exception ignored) {}
     }
 
-    // Stablecoin fallback
-    if ("usd".equals(currency) && !lookup.isBlank() && PriceMappings.STABLECOINS.contains(lookup)) {
-      PriceQuote q = new PriceQuote(symbol, 1.0, "usd", ts, "stablecoin_fallback", null, null);
-      try {
-        cache.set(key, mapper.writeValueAsString(q), priceTtlSeconds);
-      } catch (Exception ignored) {}
-      return q;
-    }
-
-    // VEILX on-chain DEX pricing (BSC PancakeSwap V2): 1 VEILX ~ X USDT (assume USDT~USD)
-    if ("usd".equals(currency) && "VEILX".equals(symbol) && veilxDex != null && veilxDex.isEnabled()) {
-      Double p = veilxDex.fetchVeilxUsdPrice().orElse(null);
-      if (p != null) {
-        PriceQuote q = new PriceQuote(symbol, p, "usd", ts, "pancakeswap_v2", null, null);
-        try {
-          cache.set(key, mapper.writeValueAsString(q), priceTtlSeconds);
-        } catch (Exception ignored) {}
-        return q;
-      }
-    }
-
-    // VIPL on-chain DEX pricing (BSC PancakeSwap V2): 1 VIPL ~ X USDT (assume USDT~USD)
-    if ("usd".equals(currency) && "VIPL".equals(symbol) && veilxDex != null && veilxDex.isEnabled()) {
-      Double p = veilxDex.fetchViplUsdPrice().orElse(null);
-      if (p != null) {
-        PriceQuote q = new PriceQuote(symbol, p, "usd", ts, "pancakeswap_v2", null, null);
-        try {
-          cache.set(key, mapper.writeValueAsString(q), priceTtlSeconds);
-        } catch (Exception ignored) {}
-        return q;
-      }
-    }
-
     // 1) CoinGecko Pro (symbol -> id)
     Double price = null;
+    Double change24hPct = null;
     String source = null;
     if (coinGecko.isEnabled()) {
       String id = coinGeckoIds.resolve(lookup);
       if (id != null) {
-        price = coinGecko.fetchSimplePriceUsd(id).orElse(null);
-        if (price != null) source = "coingecko";
+        PriceMarketData marketData = coinGecko.fetchSimpleUsdQuote(id).orElse(null);
+        if (marketData != null && positiveOrNull(marketData.price()) != null) {
+          price = marketData.price();
+          change24hPct = marketData.change24hPct();
+          source = "coingecko";
+        }
       }
     }
 
     // 2) CoinMarketCap
     if (price == null && cmc.isEnabled() && isSafeExchangeSymbol(lookup)) {
-      price = cmc.fetchUsdPriceBySymbol(lookup).orElse(null);
-      if (price != null) source = "coinmarketcap";
+      PriceMarketData marketData = cmc.fetchUsdQuoteBySymbol(lookup).orElse(null);
+      if (marketData != null && positiveOrNull(marketData.price()) != null) {
+        price = marketData.price();
+        change24hPct = marketData.change24hPct();
+        source = "coinmarketcap";
+      }
     }
 
     // 3) Binance (USDT pair)
     if (price == null && isSafeExchangeSymbol(lookup)) {
-      price = binance.fetchUsdPriceViaUsdtPair(lookup).orElse(null);
-      if (price != null) source = "binance";
+      PriceMarketData marketData = binance.fetchUsdQuoteViaUsdtPair(lookup).orElse(null);
+      if (marketData != null && positiveOrNull(marketData.price()) != null) {
+        price = marketData.price();
+        change24hPct = marketData.change24hPct();
+        source = "binance";
+      }
     }
 
-    PriceQuote q = new PriceQuote(symbol, price, currency, ts, source, null, null);
+    // 4) VEILX / VIPL on-chain CoinGecko quote. This gives us true 24h market change instead of a
+    // Pancake spot-only fallback.
+    if ("usd".equals(currency) && coinGecko.isEnabled() && veilxDex != null) {
+      String contract = null;
+      if ("VEILX".equals(lookup)) {
+        contract = veilxDex.veilxContractLower();
+      } else if ("VIPL".equals(lookup)) {
+        contract = veilxDex.viplContractLower();
+      }
+
+      String onchainNetworkId = PriceMappings.COINGECKO_ONCHAIN_NETWORKS.get(56);
+      if (contract != null
+          && !contract.isBlank()
+          && onchainNetworkId != null
+          && (price == null || change24hPct == null)) {
+        PriceMarketData marketData =
+            coinGecko.fetchOnchainTokenQuotes(56, onchainNetworkId, contract, true).get(contract);
+        if (marketData != null && positiveOrNull(marketData.price()) != null) {
+          if (price == null) {
+            price = marketData.price();
+          }
+          if (change24hPct == null) {
+            change24hPct = marketData.change24hPct();
+          }
+          source = "coingecko_onchain";
+        }
+      }
+    }
+
+    // 5) Stablecoin fallback.
+    if (price == null && "usd".equals(currency) && !lookup.isBlank() && PriceMappings.STABLECOINS.contains(lookup)) {
+      price = 1.0d;
+      change24hPct = null;
+      source = "stablecoin_fallback";
+    }
+
+    // 6) VEILX / VIPL on-chain DEX pricing as the final fallback when market APIs do not cover them.
+    if (price == null && "usd".equals(currency) && veilxDex != null && veilxDex.isEnabled()) {
+      if ("VEILX".equals(symbol)) {
+        price = veilxDex.fetchVeilxUsdPrice().orElse(null);
+        if (price != null) {
+          change24hPct = null;
+          source = "pancakeswap_v2";
+        }
+      } else if ("VIPL".equals(symbol)) {
+        price = veilxDex.fetchViplUsdPrice().orElse(null);
+        if (price != null) {
+          change24hPct = null;
+          source = "pancakeswap_v2";
+        }
+      }
+    }
+
+    if ("usd".equals(currency) && priceHistory != null && positiveOrNull(price) != null) {
+      String historyAssetKey = PriceHistoryService.symbolAssetKey(lookup.isBlank() ? symbol : lookup);
+      change24hPct = priceHistory.resolveChange24hPct(historyAssetKey, price, change24hPct, ts);
+    }
+
+    PriceQuote q = new PriceQuote(symbol, price, change24hPct, currency, ts, source, null, null);
     try {
       cache.set(key, mapper.writeValueAsString(q), priceTtlSeconds);
     } catch (Exception ignored) {}
@@ -206,8 +248,8 @@ public class PriceAggregatorService {
     String cur = normalizeCurrency(currency);
     List<String> addrs =
         contractAddresses.stream()
-            .map(a -> a == null ? "" : a.trim().toLowerCase(Locale.ROOT))
-            .filter(a -> a.startsWith("0x") && a.length() >= 42)
+            .map(a -> normalizeContractAddress(chainId, a))
+            .filter(a -> !a.isBlank())
             .distinct()
             .sorted()
             .toList();
@@ -223,48 +265,107 @@ public class PriceAggregatorService {
     }
 
     long ts = Instant.now().toEpochMilli();
-    Map<String, Double> prices = new HashMap<>();
-    String source = null;
+    Map<String, PriceMarketData> quotesByAddress = new HashMap<>();
+    Map<String, String> sourceByAddress = new HashMap<>();
 
     // 1) CoinGecko Pro token_price by platform
     String platformId = PriceMappings.COINGECKO_PLATFORMS.get(chainId);
     if (coinGecko.isEnabled() && platformId != null && !addrs.isEmpty() && "usd".equals(cur)) {
       String csv = String.join(",", addrs);
-      Map<String, Double> got = coinGecko.fetchTokenPricesByContract(chainId, platformId, csv);
+      Map<String, PriceMarketData> got =
+          coinGecko.fetchTokenQuotesByContract(chainId, platformId, csv);
       if (!got.isEmpty()) {
-        prices.putAll(got);
-        source = "coingecko";
+        for (Map.Entry<String, PriceMarketData> entry : got.entrySet()) {
+          String addressKey = normalizeContractAddress(chainId, entry.getKey());
+          PriceMarketData quote = entry.getValue();
+          if (addressKey.isBlank() || quote == null || positiveOrNull(quote.price()) == null) continue;
+          quotesByAddress.put(addressKey, quote);
+          sourceByAddress.put(addressKey, "coingecko");
+        }
       }
     }
 
-    // 1b) VEILX special-case (BSC) when CoinGecko doesn't have contract price
+    // 1a) CoinGecko Pro onchain fallback. This covers long-tail DEX tokens such as VEILX / VIPL and
+    // also gives us 24h change data for chains that aren't pure EVM.
+    String onchainNetworkId = PriceMappings.COINGECKO_ONCHAIN_NETWORKS.get(chainId);
+    if (coinGecko.isEnabled() && onchainNetworkId != null && !addrs.isEmpty() && "usd".equals(cur)) {
+      List<String> onchainTargets =
+          addrs.stream()
+              .filter(
+                  addr -> {
+                    PriceMarketData quote = quotesByAddress.get(addr);
+                    return quote == null
+                        || positiveOrNull(quote.price()) == null
+                        || quote.change24hPct() == null;
+                  })
+              .toList();
+      if (!onchainTargets.isEmpty()) {
+        String csv = String.join(",", onchainTargets);
+        Map<String, PriceMarketData> got =
+            coinGecko.fetchOnchainTokenQuotes(chainId, onchainNetworkId, csv, true);
+        for (Map.Entry<String, PriceMarketData> entry : got.entrySet()) {
+          String addressKey = normalizeContractAddress(chainId, entry.getKey());
+          PriceMarketData incoming = entry.getValue();
+          if (addressKey.isBlank() || incoming == null || positiveOrNull(incoming.price()) == null) continue;
+          PriceMarketData existing = quotesByAddress.get(addressKey);
+          if (existing == null || positiveOrNull(existing.price()) == null) {
+            quotesByAddress.put(addressKey, incoming);
+            sourceByAddress.put(addressKey, "coingecko_onchain");
+            continue;
+          }
+          if (existing.change24hPct() == null && incoming.change24hPct() != null) {
+            quotesByAddress.put(addressKey, new PriceMarketData(existing.price(), incoming.change24hPct()));
+            sourceByAddress.put(addressKey, "coingecko+onchain");
+          }
+        }
+      }
+    }
+
+    // 1b) VEILX / VIPL direct router fallback when Gecko endpoints do not have a usable quote.
     if ("usd".equals(cur) && chainId == 56 && veilxDex != null && veilxDex.isEnabled()) {
       String veilxAddr = veilxDex.veilxContractLower();
       if (!veilxAddr.isBlank() && addrs.contains(veilxAddr)) {
-        Double v = veilxDex.fetchVeilxUsdPrice().orElse(null);
-        if (v != null) {
-          // Only fill VEILX contract. Others remain null.
-          prices.put(veilxAddr, v);
-          if (source == null) source = "pancakeswap_v2";
+        PriceMarketData existing = quotesByAddress.get(veilxAddr);
+        if (existing == null || positiveOrNull(existing.price()) == null) {
+          Double v = veilxDex.fetchVeilxUsdPrice().orElse(null);
+          if (v != null) {
+            quotesByAddress.put(veilxAddr, new PriceMarketData(v, null));
+            sourceByAddress.put(veilxAddr, "pancakeswap_v2");
+          }
         }
       }
       String viplAddr = veilxDex.viplContractLower();
       if (!viplAddr.isBlank() && addrs.contains(viplAddr)) {
-        Double v = veilxDex.fetchViplUsdPrice().orElse(null);
-        if (v != null) {
-          prices.put(viplAddr, v);
-          if (source == null) source = "pancakeswap_v2";
+        PriceMarketData existing = quotesByAddress.get(viplAddr);
+        if (existing == null || positiveOrNull(existing.price()) == null) {
+          Double v = veilxDex.fetchViplUsdPrice().orElse(null);
+          if (v != null) {
+            quotesByAddress.put(viplAddr, new PriceMarketData(v, null));
+            sourceByAddress.put(viplAddr, "pancakeswap_v2");
+          }
         }
       }
     }
 
-    // NOTE: CMC/Binance don't support contract-address quoting in a clean way for MVP.
-    // If CG doesn't have a contract price, we return null price for that contract.
-
     List<PriceQuote> out = new ArrayList<>();
     for (String addr : addrs) {
-      Double p = prices.get(addr);
-      out.add(new PriceQuote(null, p, cur, ts, source, addr, chainId));
+      PriceMarketData quote = quotesByAddress.get(addr);
+      Double price = quote != null ? quote.price() : null;
+      Double change24hPct = quote != null ? quote.change24hPct() : null;
+      if ("usd".equals(cur) && priceHistory != null && positiveOrNull(price) != null) {
+        String historyAssetKey = PriceHistoryService.contractAssetKey(chainId, addr);
+        change24hPct = priceHistory.resolveChange24hPct(historyAssetKey, price, change24hPct, ts);
+      }
+      out.add(
+          new PriceQuote(
+              null,
+              price,
+              change24hPct,
+              cur,
+              ts,
+              sourceByAddress.get(addr),
+              addr,
+              chainId));
     }
 
     try {
@@ -281,6 +382,24 @@ public class PriceAggregatorService {
     return "usd";
   }
 
+  private static Double positiveOrNull(Double value) {
+    if (value == null || !Double.isFinite(value) || value <= 0d) return null;
+    return value;
+  }
+
+  private static String normalizeContractAddress(int chainId, String raw) {
+    if (raw == null) return "";
+    String value = raw.trim();
+    if (value.isBlank()) return "";
+    if (chainId == 195 || chainId == 501) {
+      return value;
+    }
+    if (value.startsWith("0x") && value.length() >= 42) {
+      return value.toLowerCase(Locale.ROOT);
+    }
+    return "";
+  }
+
   private static String sha1(String input) {
     try {
       MessageDigest md = MessageDigest.getInstance("SHA-1");
@@ -293,5 +412,3 @@ public class PriceAggregatorService {
     }
   }
 }
-
-

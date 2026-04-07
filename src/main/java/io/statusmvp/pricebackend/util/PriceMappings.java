@@ -90,10 +90,21 @@ public final class PriceMappings {
           Map.entry(1, "ethereum"),
           Map.entry(10, "optimistic-ethereum"),
           Map.entry(56, "binance-smart-chain"),
+          Map.entry(195, "tron"),
           Map.entry(137, "polygon-pos"),
+          Map.entry(501, "solana"),
           Map.entry(42161, "arbitrum-one"),
           Map.entry(8453, "base"),
           Map.entry(43114, "avalanche"));
-}
 
+  public static final Map<Integer, String> COINGECKO_ONCHAIN_NETWORKS =
+      Map.ofEntries(
+          Map.entry(1, "eth"),
+          Map.entry(10, "optimism"),
+          Map.entry(56, "bsc"),
+          Map.entry(195, "tron"),
+          Map.entry(501, "solana"),
+          Map.entry(42161, "arbitrum"),
+          Map.entry(8453, "base"));
+}
 

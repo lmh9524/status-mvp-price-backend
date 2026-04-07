@@ -92,8 +92,8 @@ class PortfolioAggregatorServiceTest {
     when(priceAggregator.getPrices(anyList(), eq("usd")))
         .thenReturn(
             List.of(
-                new PriceQuote("BNB", 600d, "usd", 1L, "mock", null, null),
-                new PriceQuote("USDT", 1d, "usd", 1L, "stablecoin_fallback", null, null)));
+                new PriceQuote("BNB", 600d, 4.5d, "usd", 1L, "mock", null, null),
+                new PriceQuote("USDT", 1d, 0.01d, "usd", 1L, "stablecoin_fallback", null, null)));
 
     List<PortfolioAssetSnapshotV2> enriched =
         service.backfillMissingUsdData(
@@ -111,6 +111,7 @@ class PortfolioAggregatorServiceTest {
                     null,
                     null,
                     null,
+                    null,
                     null),
                 new PortfolioAssetSnapshotV2(
                     56,
@@ -125,13 +126,16 @@ class PortfolioAggregatorServiceTest {
                     null,
                     null,
                     null,
+                    null,
                     null)),
             "usd");
 
     assertEquals(600d, enriched.get(0).usdPrice(), 0.000001d);
     assertEquals(600d, enriched.get(0).usdValue(), 0.000001d);
+    assertEquals(4.5d, enriched.get(0).change24hPct(), 0.000001d);
     assertEquals(1d, enriched.get(1).usdPrice(), 0.000001d);
     assertEquals(1.14034d, enriched.get(1).usdValue(), 0.000001d);
+    assertEquals(0.01d, enriched.get(1).change24hPct(), 0.000001d);
 
     verify(priceAggregator).getPricesByContract(eq(56), anyList(), eq("usd"));
     verify(priceAggregator).getPrices(anyList(), eq("usd"));

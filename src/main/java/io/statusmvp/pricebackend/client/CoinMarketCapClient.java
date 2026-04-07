@@ -1,6 +1,7 @@
 package io.statusmvp.pricebackend.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.statusmvp.pricebackend.model.PriceMarketData;
 import java.net.URI;
 import java.time.Duration;
 import java.util.Optional;
@@ -23,7 +24,7 @@ public class CoinMarketCapClient {
     return !apiKey.isBlank();
   }
 
-  public Optional<Double> fetchUsdPriceBySymbol(String symbol) {
+  public Optional<PriceMarketData> fetchUsdQuoteBySymbol(String symbol) {
     if (apiKey.isBlank() || symbol == null || symbol.isBlank()) return Optional.empty();
 
     try {
@@ -45,15 +46,35 @@ public class CoinMarketCapClient {
               .block();
       if (root == null) return Optional.empty();
 
-      JsonNode priceNode =
-          root.path("data").path(symbol.toUpperCase()).path("quote").path("USD").path("price");
-      if (!priceNode.isNumber()) return Optional.empty();
-      double price = priceNode.asDouble();
-      return price > 0 ? Optional.of(price) : Optional.empty();
+      JsonNode symbolNode = root.path("data").path(symbol.toUpperCase());
+      if (symbolNode.isArray()) {
+        symbolNode = symbolNode.size() > 0 ? symbolNode.get(0) : null;
+      }
+      if (symbolNode == null) return Optional.empty();
+
+      JsonNode usdQuote = symbolNode.path("quote").path("USD");
+      Double price = parseMaybeDouble(usdQuote.path("price"));
+      if (price == null || price <= 0d) return Optional.empty();
+      Double change24hPct = parseMaybeDouble(usdQuote.path("percent_change_24h"));
+      return Optional.of(new PriceMarketData(price, change24hPct));
     } catch (Exception ignored) {
       return Optional.empty();
     }
   }
-}
 
+  private static Double parseMaybeDouble(JsonNode node) {
+    if (node == null || node.isMissingNode() || node.isNull()) return null;
+    if (node.isNumber()) return node.asDouble();
+    if (node.isTextual()) {
+      String text = node.asText("").trim();
+      if (text.isBlank()) return null;
+      try {
+        return Double.parseDouble(text);
+      } catch (NumberFormatException ignored) {
+        return null;
+      }
+    }
+    return null;
+  }
+}
 
