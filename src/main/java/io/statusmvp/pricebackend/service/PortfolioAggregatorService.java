@@ -114,8 +114,7 @@ public class PortfolioAggregatorService {
       VeilxDexPriceService veilxDex,
       PriceAggregatorService priceAggregator,
       @Value("${app.portfolio.ankrBaseUrl:https://rpc.ankr.com/multichain}") String ankrBaseUrl,
-      @Value(
-              "${app.portfolio.ankrApiKey:8ab456e0616fa58794745f952b83f719e7ea3af2d0c9cbac69b8f22323563de7}")
+      @Value("${app.portfolio.ankrApiKey:}")
           String ankrApiKey,
       @Value("${app.portfolio.requestTtlSeconds:30}") long requestTtlSeconds,
       @Value("${app.portfolio.timeoutMs:12000}") long timeoutMs,

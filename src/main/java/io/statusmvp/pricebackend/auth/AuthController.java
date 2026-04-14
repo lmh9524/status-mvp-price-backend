@@ -26,10 +26,21 @@ import reactor.core.scheduler.Schedulers;
 public class AuthController {
   private final AuthService authService;
   private final AuthProperties authProperties;
+  private final AuthDeviceProofService authDeviceProofService;
+  private final AuthAppAttestService authAppAttestService;
+  private final AuthPlayIntegrityService authPlayIntegrityService;
 
-  public AuthController(AuthService authService, AuthProperties authProperties) {
+  public AuthController(
+      AuthService authService,
+      AuthProperties authProperties,
+      AuthDeviceProofService authDeviceProofService,
+      AuthAppAttestService authAppAttestService,
+      AuthPlayIntegrityService authPlayIntegrityService) {
     this.authService = authService;
     this.authProperties = authProperties;
+    this.authDeviceProofService = authDeviceProofService;
+    this.authAppAttestService = authAppAttestService;
+    this.authPlayIntegrityService = authPlayIntegrityService;
   }
 
   @GetMapping(path = "/.well-known/jwks.json", produces = MediaType.APPLICATION_JSON_VALUE)
@@ -38,11 +49,66 @@ public class AuthController {
         .subscribeOn(Schedulers.boundedElastic());
   }
 
+  @PostMapping(path = "/api/v1/auth/device-proof/challenge", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.DeviceProofChallengeResponse> deviceProofChallenge(
+      @Valid @RequestBody AuthDtos.DeviceProofChallengeRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform) {
+    return Mono.fromCallable(() -> authDeviceProofService.issueChallenge(request, deviceId, platform))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @PostMapping(path = "/api/v1/auth/app-attest/challenge", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.AppAttestChallengeResponse> appAttestChallenge(
+      @RequestBody(required = false) AuthDtos.AppAttestChallengeRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform) {
+    return Mono.fromCallable(
+            () ->
+                authAppAttestService.issueChallenge(
+                    request == null ? new AuthDtos.AppAttestChallengeRequest(null) : request,
+                    deviceId,
+                    platform))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @PostMapping(path = "/api/v1/auth/app-attest/register", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.AppAttestRegisterResponse> appAttestRegister(
+      @Valid @RequestBody AuthDtos.AppAttestRegisterRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform) {
+    return Mono.fromCallable(() -> authAppAttestService.registerAttestation(request, deviceId, platform))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @PostMapping(path = "/api/v1/auth/app-attest/assertion/challenge", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.AppAttestAssertionChallengeResponse> appAttestAssertionChallenge(
+      @Valid @RequestBody AuthDtos.AppAttestAssertionChallengeRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform) {
+    return Mono.fromCallable(() -> authAppAttestService.issueAssertionChallenge(request, deviceId, platform))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
   @GetMapping(path = "/api/v1/auth/x/start", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.XStartResponse> startX(
       @RequestParam(value = "appRedirectUri", required = false) String appRedirectUri,
-      @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
-    return Mono.fromCallable(() -> authService.startXLogin(appRedirectUri, deviceId))
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+                requireSecureAndroidSocialAuthChannel(platform, exchange, "x_start");
+                return authService.startXLogin(
+                    appRedirectUri,
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "GET",
+                        "/api/v1/auth/x/start",
+                        exchange));
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -50,9 +116,22 @@ public class AuthController {
   public Mono<AuthDtos.OAuthStartResponse> startTelegram(
       @RequestParam(value = "appRedirectUri", required = false) String appRedirectUri,
       ServerWebExchange exchange,
-      @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform) {
     return Mono.fromCallable(
-            () -> authService.startTelegramLogin(appRedirectUri, deviceId, resolveExternalBaseUrl(exchange)))
+            () -> {
+                requireSecureAndroidSocialAuthChannel(platform, exchange, "telegram_start");
+                return authService.startTelegramLogin(
+                    appRedirectUri,
+                    deviceId,
+                    resolveExternalBaseUrl(exchange),
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "GET",
+                        "/api/v1/auth/tg/start",
+                        exchange));
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -166,7 +245,8 @@ public class AuthController {
                         hash == null ? "" : hash,
                         widgetContext.appRedirectUri());
                 AuthDtos.AuthCodeResponse result =
-                    authService.telegramLogin(request, ip, widgetContext.deviceId());
+                    authService.telegramLogin(
+                        request, ip, widgetContext.deviceId(), widgetContext.deviceProofKeyId());
                 String location =
                     authService.callbackRedirectUrl(widgetContext.appRedirectUri(), result, state);
                 return ResponseEntity.status(HttpStatus.FOUND).header(HttpHeaders.LOCATION, location).build();
@@ -254,8 +334,22 @@ public class AuthController {
   public Mono<AuthDtos.AuthCodeResponse> xResume(
       @Valid @RequestBody AuthDtos.XResumeRequest request,
       @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
       ServerWebExchange exchange) {
-    return Mono.fromCallable(() -> authService.resumeXLogin(request.resumeToken(), resolveClientIp(exchange), deviceId))
+    return Mono.fromCallable(
+            () -> {
+                requireSecureAndroidSocialAuthChannel(platform, exchange, "x_resume");
+                return authService.resumeXLogin(
+                    request.resumeToken(),
+                    resolveClientIp(exchange),
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/x/resume",
+                        exchange));
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -263,9 +357,22 @@ public class AuthController {
   public Mono<AuthDtos.AuthCodeResponse> telegramLogin(
       @Valid @RequestBody AuthDtos.TelegramLoginRequest request,
       @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
       ServerWebExchange exchange) {
     return Mono.fromCallable(
-            () -> authService.telegramLogin(request, resolveClientIp(exchange), deviceId))
+            () -> {
+                requireSecureAndroidSocialAuthChannel(platform, exchange, "telegram_login");
+                return authService.telegramLogin(
+                    request,
+                    resolveClientIp(exchange),
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/tg/login",
+                        exchange));
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -273,9 +380,22 @@ public class AuthController {
   public Mono<AuthDtos.AuthCodeResponse> appleLogin(
       @Valid @RequestBody AuthDtos.AppleLoginRequest request,
       @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
       ServerWebExchange exchange) {
     return Mono.fromCallable(
-            () -> authService.appleLogin(request, resolveClientIp(exchange), deviceId))
+            () -> {
+                requireSecureAndroidSocialAuthChannel(platform, exchange, "apple_login");
+                return authService.appleLogin(
+                    request,
+                    resolveClientIp(exchange),
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/apple/login",
+                        exchange));
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -351,16 +471,44 @@ public class AuthController {
   @PostMapping(path = "/api/v1/auth/exchange", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.ExchangeResponse> exchange(
       @Valid @RequestBody AuthDtos.ExchangeRequest request,
-      @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
-    return Mono.fromCallable(() -> authService.exchange(request, deviceId))
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+                requireSecureAndroidSocialAuthChannel(platform, exchange, "exchange");
+                return authService.exchange(
+                    request,
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/exchange",
+                        exchange));
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
   @PostMapping(path = "/api/v1/auth/web3auth/jwt", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.Web3authJwtResponse> web3authJwt(
       @Valid @RequestBody AuthDtos.ExchangeRequest request,
-      @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
-    return Mono.fromCallable(() -> authService.web3authJwt(request, deviceId))
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+                requireSecureAndroidSocialAuthChannel(platform, exchange, "web3auth_jwt");
+                return authService.web3authJwt(
+                    request,
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/web3auth/jwt",
+                        exchange));
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -368,6 +516,7 @@ public class AuthController {
   public Mono<AuthDtos.SiweNonceResponse> siweNonce(
       @Valid @RequestBody AuthDtos.SiweNonceRequest request,
       @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
       ServerWebExchange exchange) {
     return Mono.fromCallable(
             () ->
@@ -375,7 +524,13 @@ public class AuthController {
                     request,
                     resolveClientIp(exchange),
                     deviceId,
-                    resolveExternalBaseUrl(exchange)))
+                    resolveExternalBaseUrl(exchange),
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/siwe/nonce",
+                        exchange)))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -383,28 +538,100 @@ public class AuthController {
   public Mono<AuthDtos.SiweVerifyResponse> siweVerify(
       @Valid @RequestBody AuthDtos.SiweVerifyRequest request,
       @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
       ServerWebExchange exchange) {
-    return Mono.fromCallable(() -> authService.siweVerify(request, resolveClientIp(exchange), deviceId))
+    return Mono.fromCallable(
+            () ->
+                authService.siweVerify(
+                    request,
+                    resolveClientIp(exchange),
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/siwe/verify",
+                        exchange)))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
   @PostMapping(path = "/api/v1/auth/refresh", produces = MediaType.APPLICATION_JSON_VALUE)
-  public Mono<AuthDtos.RefreshResponse> refresh(@Valid @RequestBody AuthDtos.RefreshRequest request) {
-    return Mono.fromCallable(() -> authService.refresh(request))
+  public Mono<AuthDtos.RefreshResponse> refresh(
+      @Valid @RequestBody AuthDtos.RefreshRequest request,
+      @RequestHeader(value = "Authorization", required = false) String authorizationHeader,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () ->
+                authService.refresh(
+                    request,
+                    authorizationHeader,
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/refresh",
+                        exchange)))
+        .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  @PostMapping(path = "/api/v1/auth/logout", produces = MediaType.APPLICATION_JSON_VALUE)
+  public Mono<AuthDtos.LogoutResponse> logout(
+      @Valid @RequestBody AuthDtos.LogoutRequest request,
+      @RequestHeader(value = "Authorization", required = false) String authorizationHeader,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () ->
+                authService.logout(
+                    request,
+                    authorizationHeader,
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/logout",
+                        exchange)))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
   @GetMapping(path = "/api/v1/auth/me", produces = MediaType.APPLICATION_JSON_VALUE)
-  public Mono<AuthDtos.MeResponse> me(@RequestHeader("Authorization") String authorizationHeader) {
-    return Mono.fromCallable(() -> authService.me(authorizationHeader))
+  public Mono<AuthDtos.MeResponse> me(
+      @RequestHeader("Authorization") String authorizationHeader,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+              verifiedDeviceProofKeyId(deviceId, platform, "GET", "/api/v1/auth/me", exchange);
+              return authService.me(authorizationHeader);
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
   @PostMapping(path = "/api/v1/auth/account/delete", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.DeleteAccountResponse> deleteAccount(
       @RequestHeader("Authorization") String authorizationHeader,
-      @RequestBody(required = false) AuthDtos.DeleteAccountRequest request) {
-    return Mono.fromCallable(() -> authService.deleteAccount(authorizationHeader, request))
+      @RequestBody(required = false) AuthDtos.DeleteAccountRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () ->
+                authService.deleteAccount(
+                    authorizationHeader,
+                    request,
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/account/delete",
+                        exchange)))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -412,32 +639,118 @@ public class AuthController {
   public Mono<AuthDtos.MeResponse> bind(
       @RequestHeader("Authorization") String authorizationHeader,
       @Valid @RequestBody AuthDtos.BindRequest request,
-      @RequestHeader(value = "X-Device-Id", required = false) String deviceId) {
-    return Mono.fromCallable(() -> authService.bindProvider(authorizationHeader, request, deviceId))
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+                requireSecureAndroidSocialAuthChannel(platform, exchange, "bind_provider");
+                return authService.bindProvider(
+                    authorizationHeader,
+                    request,
+                    deviceId,
+                    verifiedDeviceProofKeyId(
+                        deviceId,
+                        platform,
+                        "POST",
+                        "/api/v1/auth/providers/bind",
+                        exchange));
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
   @PostMapping(path = "/api/v1/auth/providers/unbind", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.MeResponse> unbind(
       @RequestHeader("Authorization") String authorizationHeader,
-      @Valid @RequestBody AuthDtos.UnbindRequest request) {
-    return Mono.fromCallable(() -> authService.unbindProvider(authorizationHeader, request))
+      @Valid @RequestBody AuthDtos.UnbindRequest request,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+              verifiedDeviceProofKeyId(deviceId, platform, "POST", "/api/v1/auth/providers/unbind", exchange);
+              return authService.unbindProvider(authorizationHeader, request);
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
   @GetMapping(path = "/api/v1/auth/sync/dapps", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.SyncPayloadResponse> getSync(
-      @RequestHeader("Authorization") String authorizationHeader) {
-    return Mono.fromCallable(() -> authService.getSync(authorizationHeader))
+      @RequestHeader("Authorization") String authorizationHeader,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+              verifiedDeviceProofKeyId(deviceId, platform, "GET", "/api/v1/auth/sync/dapps", exchange);
+              return authService.getSync(authorizationHeader);
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 
   @PostMapping(path = "/api/v1/auth/sync/dapps", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.SyncPayloadResponse> upsertSync(
       @RequestHeader("Authorization") String authorizationHeader,
-      @Valid @RequestBody AuthDtos.SyncPayloadInput payload) {
-    return Mono.fromCallable(() -> authService.upsertSync(authorizationHeader, payload))
+      @Valid @RequestBody AuthDtos.SyncPayloadInput payload,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      @RequestHeader(value = "X-App-Platform", required = false) String platform,
+      ServerWebExchange exchange) {
+    return Mono.fromCallable(
+            () -> {
+              verifiedDeviceProofKeyId(deviceId, platform, "POST", "/api/v1/auth/sync/dapps", exchange);
+              return authService.upsertSync(authorizationHeader, payload);
+            })
         .subscribeOn(Schedulers.boundedElastic());
+  }
+
+  private String verifiedDeviceProofKeyId(
+      String deviceId,
+      String platform,
+      String method,
+      String path,
+      ServerWebExchange exchange) {
+    authPlayIntegrityService.verifyProtectedRequest(
+        deviceId,
+        platform,
+        method,
+        path,
+        new AuthPlayIntegrityService.PlayIntegrityHeaders(
+            exchange.getRequest().getHeaders().getFirst("X-App-Distribution-Channel"),
+            exchange.getRequest().getHeaders().getFirst("X-Play-Integrity-Token"),
+            exchange.getRequest().getHeaders().getFirst("X-Play-Integrity-Request-Hash")));
+    authAppAttestService.verifyProtectedRequest(
+        deviceId,
+        platform,
+        method,
+        path,
+        new AuthAppAttestService.AppAttestHeaders(
+            exchange.getRequest().getHeaders().getFirst("X-App-Attest-Challenge-Id"),
+            exchange.getRequest().getHeaders().getFirst("X-App-Attest-Key-Id"),
+            exchange.getRequest().getHeaders().getFirst("X-App-Attest-Assertion"),
+            exchange.getRequest().getHeaders().getFirst("X-App-Attest-Capability")));
+    AuthDeviceProofService.VerifiedDeviceProof proof =
+        authDeviceProofService.verifyProtectedRequest(
+            deviceId,
+            platform,
+            method,
+            path,
+            new AuthDeviceProofService.DeviceProofHeaders(
+                exchange.getRequest().getHeaders().getFirst("X-Device-Proof-Challenge-Id"),
+                exchange.getRequest().getHeaders().getFirst("X-Device-Proof-Key-Id"),
+                exchange.getRequest().getHeaders().getFirst("X-Device-Proof-Signature"),
+                exchange.getRequest().getHeaders().getFirst("X-Device-Proof-Public-Key"),
+                exchange.getRequest().getHeaders().getFirst("X-Device-Proof-Capability")));
+    return proof == null ? null : proof.keyId();
+  }
+
+  private void requireSecureAndroidSocialAuthChannel(
+      String platform,
+      ServerWebExchange exchange,
+      String operation) {
+    authPlayIntegrityService.requireAllowedProtectedAuthChannel(
+        platform,
+        exchange.getRequest().getHeaders().getFirst("X-App-Distribution-Channel"),
+        operation);
   }
 
   private String resolveClientIp(ServerWebExchange exchange) {

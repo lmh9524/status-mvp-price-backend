@@ -69,7 +69,7 @@ public class AuthService {
     this.objectMapper = objectMapper;
   }
 
-  public AuthDtos.XStartResponse startXLogin(String appRedirectUri, String deviceId) {
+  public AuthDtos.XStartResponse startXLogin(String appRedirectUri, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
     ensureXEnabled();
     validateXConfig();
@@ -108,13 +108,14 @@ public class AuthService {
     }
 
     store.putOAuthStateDevice(state, deviceId, authProperties.getOauthStateTtlSeconds());
+    store.putOAuthStateProof(state, deviceProofKeyId, authProperties.getOauthStateTtlSeconds());
     return new AuthDtos.XStartResponse(
         xOAuthClient.buildAuthorizeUrl(state, codeChallenge), state,
         authProperties.getOauthStateTtlSeconds());
   }
 
   public AuthDtos.OAuthStartResponse startTelegramLogin(
-      String appRedirectUri, String deviceId, String externalBaseUrl) {
+      String appRedirectUri, String deviceId, String externalBaseUrl, String deviceProofKeyId) {
     ensureAuthEnabled();
     ensureTgEnabled();
     ensureTgLegacyWidgetEnabled();
@@ -151,6 +152,7 @@ public class AuthService {
     }
 
     store.putOAuthStateDevice(state, deviceId, authProperties.getOauthStateTtlSeconds());
+    store.putOAuthStateProof(state, deviceProofKeyId, authProperties.getOauthStateTtlSeconds());
     String authorizeUrl =
         UriComponentsBuilder.fromHttpUrl(baseUrl)
             .path("/api/v1/auth/tg/widget")
@@ -177,7 +179,8 @@ public class AuthService {
     if (!appRedirectUri.equals(resolved.appRedirectUri())) {
       throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
     }
-    return new TelegramWidgetStartContext(resolved.appRedirectUri(), resolved.deviceId());
+    return new TelegramWidgetStartContext(
+        resolved.appRedirectUri(), resolved.deviceId(), resolved.deviceProofKeyId());
   }
 
   public void validateAppRedirectUri(String appRedirectUri) {
@@ -215,6 +218,7 @@ public class AuthService {
     String appRedirectUri;
     String codeVerifier;
     String effectiveDeviceId = emptyToNull(deviceId);
+    String effectiveDeviceProofKeyId = null;
 
     String stateSecret = authProperties.getTg().getStateSecret();
     if (StringUtils.hasText(stateSecret) && TelegramOidcStateTokens.looksLikeToken(state)) {
@@ -232,6 +236,7 @@ public class AuthService {
       if (!StringUtils.hasText(effectiveDeviceId)) {
         effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
       }
+      effectiveDeviceProofKeyId = store.consumeOAuthStateProof(state).orElse(null);
     } else {
       OAuthStateRecord stateRecord =
           store
@@ -248,6 +253,7 @@ public class AuthService {
       if (!StringUtils.hasText(effectiveDeviceId)) {
         effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
       }
+      effectiveDeviceProofKeyId = store.consumeOAuthStateProof(state).orElse(null);
     }
 
     if (!StringUtils.hasText(deviceId) && StringUtils.hasText(effectiveDeviceId)) {
@@ -269,7 +275,13 @@ public class AuthService {
     String providerSub = AuthUtils.providerSub(AuthProvider.TG, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
-    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub, effectiveDeviceId);
+    AuthCodeRecord authCode =
+        issueAuthCode(
+            AuthProvider.TG,
+            providerUserId,
+            providerSub,
+            effectiveDeviceId,
+            effectiveDeviceProofKeyId);
     metrics.loginSuccess("tg");
     return new XCallbackResult(
         new AuthDtos.AuthCodeResponse(
@@ -308,7 +320,13 @@ public class AuthService {
     String providerSub = AuthUtils.providerSub(AuthProvider.TG, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
-    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub, resolved.deviceId());
+    AuthCodeRecord authCode =
+        issueAuthCode(
+            AuthProvider.TG,
+            providerUserId,
+            providerSub,
+            resolved.deviceId(),
+            resolved.deviceProofKeyId());
     metrics.loginSuccess("tg");
     return new XCallbackResult(
         new AuthDtos.AuthCodeResponse(
@@ -337,6 +355,7 @@ public class AuthService {
     String appRedirectUri;
     String codeVerifier;
     String effectiveDeviceId = emptyToNull(deviceId);
+    String effectiveDeviceProofKeyId = null;
 
     String stateSecret = authProperties.getX().getStateSecret();
     if (StringUtils.hasText(stateSecret) && XOAuthStateTokens.looksLikeToken(state)) {
@@ -354,6 +373,7 @@ public class AuthService {
       if (!StringUtils.hasText(effectiveDeviceId)) {
         effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
       }
+      effectiveDeviceProofKeyId = store.consumeOAuthStateProof(state).orElse(null);
     } else {
       OAuthStateRecord stateRecord =
           store
@@ -370,6 +390,7 @@ public class AuthService {
       if (!StringUtils.hasText(effectiveDeviceId)) {
         effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
       }
+      effectiveDeviceProofKeyId = store.consumeOAuthStateProof(state).orElse(null);
     }
     if (!StringUtils.hasText(deviceId) && StringUtils.hasText(effectiveDeviceId)) {
       riskService.checkLoginDeviceRateLimit(effectiveDeviceId);
@@ -402,7 +423,14 @@ public class AuthService {
           if (StringUtils.hasText(stateSecret) && StringUtils.hasText(effectiveDeviceId)) {
             try {
               String resumeToken =
-                  XOAuthResumeTokens.issue(objectMapper, stateSecret, effectiveDeviceId, accessToken, 600, now());
+                  XOAuthResumeTokens.issue(
+                      objectMapper,
+                      stateSecret,
+                      effectiveDeviceId,
+                      effectiveDeviceProofKeyId,
+                      accessToken,
+                      600,
+                      now());
               throw new AuthException(
                   AuthErrorCode.PROVIDER_UNAVAILABLE,
                   e.getMessage(),
@@ -422,7 +450,13 @@ public class AuthService {
     String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
-    AuthCodeRecord authCode = issueAuthCode(AuthProvider.X, providerUserId, providerSub, effectiveDeviceId);
+    AuthCodeRecord authCode =
+        issueAuthCode(
+            AuthProvider.X,
+            providerUserId,
+            providerSub,
+            effectiveDeviceId,
+            effectiveDeviceProofKeyId);
     metrics.loginSuccess("x");
     return new XCallbackResult(
         new AuthDtos.AuthCodeResponse(
@@ -435,7 +469,8 @@ public class AuthService {
         state);
   }
 
-  public AuthDtos.AuthCodeResponse resumeXLogin(String resumeToken, String ip, String deviceId) {
+  public AuthDtos.AuthCodeResponse resumeXLogin(
+      String resumeToken, String ip, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
     ensureXEnabled();
     validateXConfig();
@@ -458,6 +493,9 @@ public class AuthService {
     }
     if (parsed.deviceId() != null && !deviceId.trim().equals(parsed.deviceId().trim())) {
       throw new AuthException(AuthErrorCode.UNAUTHORIZED, "invalid device id", 401);
+    }
+    if (parsed.deviceProofKeyId() != null && !parsed.deviceProofKeyId().equals(deviceProofKeyId)) {
+      throw new AuthException(AuthErrorCode.DEVICE_PROOF_INVALID, "invalid device proof", 401);
     }
 
     // X userinfo may intermittently 503 from some regions. In resume flow (app->backend), we can afford
@@ -492,7 +530,8 @@ public class AuthService {
     String providerSub = AuthUtils.providerSub(AuthProvider.X, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
-    AuthCodeRecord authCode = issueAuthCode(AuthProvider.X, providerUserId, providerSub, deviceId.trim());
+    AuthCodeRecord authCode =
+        issueAuthCode(AuthProvider.X, providerUserId, providerSub, deviceId.trim(), deviceProofKeyId);
     metrics.loginSuccess("x");
     return new AuthDtos.AuthCodeResponse(
         AuthProvider.X.code(),
@@ -503,7 +542,7 @@ public class AuthService {
   }
 
   public AuthDtos.AuthCodeResponse telegramLogin(
-      AuthDtos.TelegramLoginRequest request, String ip, String deviceId) {
+      AuthDtos.TelegramLoginRequest request, String ip, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
     ensureTgEnabled();
     ensureTgLegacyWidgetEnabled();
@@ -515,7 +554,13 @@ public class AuthService {
     String providerSub = AuthUtils.providerSub(AuthProvider.TG, providerUserId);
     riskService.checkProviderAllowed(providerSub);
 
-    AuthCodeRecord authCode = issueAuthCode(AuthProvider.TG, providerUserId, providerSub, emptyToNull(deviceId));
+    AuthCodeRecord authCode =
+        issueAuthCode(
+            AuthProvider.TG,
+            providerUserId,
+            providerSub,
+            emptyToNull(deviceId),
+            deviceProofKeyId);
     metrics.loginSuccess("tg");
     return new AuthDtos.AuthCodeResponse(
         AuthProvider.TG.code(),
@@ -525,7 +570,8 @@ public class AuthService {
         authProperties.getOneTimeCodeTtlSeconds());
   }
 
-  public AuthDtos.AuthCodeResponse appleLogin(AuthDtos.AppleLoginRequest request, String ip, String deviceId) {
+  public AuthDtos.AuthCodeResponse appleLogin(
+      AuthDtos.AppleLoginRequest request, String ip, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
     ensureAppleEnabled();
     validateAppleLoginConfig();
@@ -539,7 +585,12 @@ public class AuthService {
     riskService.checkProviderAllowed(providerSub);
 
     AuthCodeRecord authCode =
-        issueAuthCode(AuthProvider.APPLE, providerUserId, providerSub, emptyToNull(deviceId));
+        issueAuthCode(
+            AuthProvider.APPLE,
+            providerUserId,
+            providerSub,
+            emptyToNull(deviceId),
+            deviceProofKeyId);
     log.info(
         "apple login verified: providerSub={}, emailPresent={}, deviceBound={}",
         providerSub,
@@ -554,9 +605,10 @@ public class AuthService {
         authProperties.getOneTimeCodeTtlSeconds());
   }
 
-  public AuthDtos.ExchangeResponse exchange(AuthDtos.ExchangeRequest request, String deviceId) {
+  public AuthDtos.ExchangeResponse exchange(
+      AuthDtos.ExchangeRequest request, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
-    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId);
+    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId, deviceProofKeyId);
     String providerSub = codeRecord.providerSub();
     String walletSub = resolveOrCreateWalletForProvider(codeRecord);
     String nonce = request.nonce();
@@ -567,11 +619,14 @@ public class AuthService {
 
     long now = now();
     String refreshHash = jwtService.sha256Hex(refreshToken);
+    String normalizedDeviceId = requireRefreshDeviceId(deviceId);
     RefreshTokenRecord refreshRecord =
         new RefreshTokenRecord(
             UUID.randomUUID().toString(),
             walletSub,
             refreshHash,
+            normalizedDeviceId,
+            deviceProofKeyId,
             now,
             now + authProperties.getRefreshTokenTtlSeconds() * 1000,
             null,
@@ -590,9 +645,10 @@ public class AuthService {
         authProperties.getRefreshTokenTtlSeconds());
   }
 
-  public AuthDtos.Web3authJwtResponse web3authJwt(AuthDtos.ExchangeRequest request, String deviceId) {
+  public AuthDtos.Web3authJwtResponse web3authJwt(
+      AuthDtos.ExchangeRequest request, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
-    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId);
+    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId, deviceProofKeyId);
     String providerSub = codeRecord.providerSub();
     String nonce = request.nonce();
     String web3authJwt =
@@ -602,7 +658,11 @@ public class AuthService {
   }
 
   public AuthDtos.SiweNonceResponse siweNonce(
-      AuthDtos.SiweNonceRequest request, String ip, String deviceId, String externalBaseUrl) {
+      AuthDtos.SiweNonceRequest request,
+      String ip,
+      String deviceId,
+      String externalBaseUrl,
+      String deviceProofKeyId) {
     ensureAuthEnabled();
     riskService.checkIpAllowed(ip);
     riskService.checkLoginRateLimits(ip, deviceId);
@@ -629,7 +689,8 @@ public class AuthService {
     String nonce = AuthUtils.randomBase64Url(24);
     long expiresAt = now + ttlSeconds * 1000;
     store.putSiweNonce(
-        new SiweNonceRecord(nonce, address, domain.trim(), baseUrl, now, expiresAt), ttlSeconds);
+        new SiweNonceRecord(nonce, address, domain.trim(), baseUrl, deviceProofKeyId, now, expiresAt),
+        ttlSeconds);
 
     Instant issuedAt = Instant.ofEpochMilli(now);
     Instant expirationTime = Instant.ofEpochMilli(expiresAt);
@@ -644,7 +705,7 @@ public class AuthService {
   }
 
   public AuthDtos.SiweVerifyResponse siweVerify(
-      AuthDtos.SiweVerifyRequest request, String ip, String deviceId) {
+      AuthDtos.SiweVerifyRequest request, String ip, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
     riskService.checkIpAllowed(ip);
     riskService.checkLoginRateLimits(ip, deviceId);
@@ -686,6 +747,10 @@ public class AuthService {
       metrics.loginFailure("siwe", "domain_mismatch");
       throw new AuthException(AuthErrorCode.SIWE_MESSAGE_INVALID, "invalid siwe message", 400);
     }
+    if (!Objects.equals(emptyToNull(record.deviceProofKeyId()), emptyToNull(deviceProofKeyId))) {
+      metrics.loginFailure("siwe", "device_proof_mismatch");
+      throw new AuthException(AuthErrorCode.DEVICE_PROOF_INVALID, "invalid device proof", 401);
+    }
     if (parsed.expirationTime().toEpochMilli() < now) {
       metrics.loginFailure("siwe", "message_expired");
       throw new AuthException(AuthErrorCode.SIWE_NONCE_EXPIRED, "nonce expired", 401);
@@ -710,11 +775,14 @@ public class AuthService {
     String refreshToken = AuthUtils.randomBase64Url(48);
 
     String refreshHash = jwtService.sha256Hex(refreshToken);
+    String normalizedDeviceId = requireRefreshDeviceId(deviceId);
     RefreshTokenRecord refreshRecord =
         new RefreshTokenRecord(
             UUID.randomUUID().toString(),
             address,
             refreshHash,
+            normalizedDeviceId,
+            deviceProofKeyId,
             now,
             now + authProperties.getRefreshTokenTtlSeconds() * 1000,
             null,
@@ -730,9 +798,12 @@ public class AuthService {
         authProperties.getRefreshTokenTtlSeconds());
   }
 
-  public AuthDtos.RefreshResponse refresh(AuthDtos.RefreshRequest request) {
+  public AuthDtos.RefreshResponse refresh(
+      AuthDtos.RefreshRequest request, String authorizationHeader, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
     String tokenHash = jwtService.sha256Hex(request.refreshToken());
+    String actualDeviceId = requireRefreshDeviceId(deviceId);
+    AuthJwtService.AccessTokenClaims currentAccessClaims = resolveOptionalActiveAccessTokenClaims(authorizationHeader);
     RefreshTokenRecord record =
         store
             .getRefreshTokenByHash(tokenHash)
@@ -741,6 +812,23 @@ public class AuthService {
       store.consumeRefreshTokenByHash(record.tokenHash());
       throw new AuthException(AuthErrorCode.REFRESH_TOKEN_INVALID, "refresh token expired", 401);
     }
+    String expectedDeviceId = emptyToNull(record.deviceId());
+    if (expectedDeviceId != null && !expectedDeviceId.equals(actualDeviceId)) {
+      throw new AuthException(AuthErrorCode.REFRESH_TOKEN_INVALID, "invalid refresh token", 401);
+    }
+    String expectedDeviceProofKeyId = emptyToNull(record.deviceProofKeyId());
+    if (expectedDeviceProofKeyId != null && !expectedDeviceProofKeyId.equals(emptyToNull(deviceProofKeyId))) {
+      throw new AuthException(AuthErrorCode.REFRESH_TOKEN_INVALID, "invalid refresh token", 401);
+    }
+    if (currentAccessClaims != null && !record.walletSub().equals(currentAccessClaims.walletSub())) {
+      log.warn(
+          "refresh rejected because access token wallet mismatch: refreshWalletSub={}, accessWalletSub={}, deviceId={}",
+          record.walletSub(),
+          currentAccessClaims.walletSub(),
+          actualDeviceId);
+      throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "access token wallet mismatch", 401);
+    }
+    String boundDeviceId = expectedDeviceId == null ? actualDeviceId : expectedDeviceId;
 
     String accessToken =
         jwtService.issueAccessToken(record.walletSub(), authProperties.getAccessTokenTtlSeconds());
@@ -752,17 +840,70 @@ public class AuthService {
             UUID.randomUUID().toString(),
             record.walletSub(),
             newHash,
+            boundDeviceId,
+            expectedDeviceProofKeyId == null ? deviceProofKeyId : expectedDeviceProofKeyId,
             now,
             now + authProperties.getRefreshTokenTtlSeconds() * 1000,
             null,
             record.id());
     store.putRefreshToken(next, authProperties.getRefreshTokenTtlSeconds());
     store.consumeRefreshTokenByHash(tokenHash);
+    boolean accessTokenRevoked = revokeAccessTokenClaims(currentAccessClaims, "refresh_rotate");
+    log.info(
+        "refresh rotated: walletSub={}, deviceId={}, oldRefreshId={}, newRefreshId={}, accessTokenRevoked={}",
+        record.walletSub(),
+        boundDeviceId,
+        record.id(),
+        next.id(),
+        accessTokenRevoked);
     return new AuthDtos.RefreshResponse(
         accessToken,
         newRefreshToken,
         authProperties.getAccessTokenTtlSeconds(),
         authProperties.getRefreshTokenTtlSeconds());
+  }
+
+  public AuthDtos.LogoutResponse logout(
+      AuthDtos.LogoutRequest request, String authorizationHeader, String deviceId, String deviceProofKeyId) {
+    ensureAuthEnabled();
+    String tokenHash = jwtService.sha256Hex(request.refreshToken());
+    String actualDeviceId = requireRefreshDeviceId(deviceId);
+    AuthJwtService.AccessTokenClaims currentAccessClaims = resolveOptionalActiveAccessTokenClaims(authorizationHeader);
+    RefreshTokenRecord record = store.getRefreshTokenByHash(tokenHash).orElse(null);
+    if (record == null) {
+      return new AuthDtos.LogoutResponse(true);
+    }
+    if (record.revokedAt() != null || record.expiresAt() < now()) {
+      store.consumeRefreshTokenByHash(record.tokenHash());
+      return new AuthDtos.LogoutResponse(true);
+    }
+
+    String expectedDeviceId = emptyToNull(record.deviceId());
+    if (expectedDeviceId != null && !expectedDeviceId.equals(actualDeviceId)) {
+      return new AuthDtos.LogoutResponse(false);
+    }
+    String expectedDeviceProofKeyId = emptyToNull(record.deviceProofKeyId());
+    if (expectedDeviceProofKeyId != null && !expectedDeviceProofKeyId.equals(emptyToNull(deviceProofKeyId))) {
+      return new AuthDtos.LogoutResponse(false);
+    }
+    if (currentAccessClaims != null && !record.walletSub().equals(currentAccessClaims.walletSub())) {
+      log.warn(
+          "logout rejected because access token wallet mismatch: refreshWalletSub={}, accessWalletSub={}, deviceId={}",
+          record.walletSub(),
+          currentAccessClaims.walletSub(),
+          actualDeviceId);
+      return new AuthDtos.LogoutResponse(false);
+    }
+
+    store.consumeRefreshTokenByHash(tokenHash);
+    boolean accessTokenRevoked = revokeAccessTokenClaims(currentAccessClaims, "logout");
+    log.info(
+        "logout completed: walletSub={}, deviceId={}, refreshId={}, accessTokenRevoked={}",
+        record.walletSub(),
+        actualDeviceId,
+        record.id(),
+        accessTokenRevoked);
+    return new AuthDtos.LogoutResponse(true);
   }
 
   public AuthDtos.MeResponse me(String authorizationHeader) {
@@ -776,13 +917,15 @@ public class AuthService {
   }
 
   public AuthDtos.DeleteAccountResponse deleteAccount(
-      String authorizationHeader, AuthDtos.DeleteAccountRequest request) {
+      String authorizationHeader, AuthDtos.DeleteAccountRequest request, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
     AuthJwtService.AccessTokenClaims claims = requireActiveAccessTokenClaims(authorizationHeader);
     String walletSub = claims.walletSub();
     long deletedAt = now();
     long tombstoneTtlSeconds = Math.max(300, authProperties.getAccessTokenTtlSeconds() + 60L);
     try {
+      RefreshTokenRecord refreshRecord =
+          requireOwnedActiveRefreshToken(request == null ? null : request.refreshToken(), walletSub, deviceId, deviceProofKeyId);
       WalletProfile profile = store.getWalletProfile(walletSub).orElse(null);
       int removedProviders = 0;
       if (profile != null) {
@@ -793,26 +936,20 @@ public class AuthService {
         }
       }
 
-      String requestedRefreshToken = emptyToNull(request == null ? null : request.refreshToken());
-      boolean refreshTokenRevoked = false;
-      if (requestedRefreshToken != null) {
-        String tokenHash = jwtService.sha256Hex(requestedRefreshToken);
-        refreshTokenRevoked =
-            store.getRefreshTokenByHash(tokenHash).map(RefreshTokenRecord::walletSub).filter(walletSub::equals).isPresent();
-      }
-
       store.markWalletDeleted(walletSub, deletedAt, tombstoneTtlSeconds);
       int revokedRefreshTokens = store.revokeAllRefreshTokensForWallet(walletSub);
       store.deleteWalletProfile(walletSub);
+      boolean accessTokenRevoked = revokeAccessTokenClaims(claims, "account_delete");
 
       log.info(
-          "account deleted: walletSub={}, removedProviders={}, revokedRefreshTokens={}, refreshTokenRevoked={}",
+          "account deleted: walletSub={}, removedProviders={}, revokedRefreshTokens={}, refreshTokenId={}, accessTokenRevoked={}",
           walletSub,
           removedProviders,
           revokedRefreshTokens,
-          refreshTokenRevoked);
+          refreshRecord.id(),
+          accessTokenRevoked);
       metrics.deleteSuccess();
-      return new AuthDtos.DeleteAccountResponse(walletSub, removedProviders, refreshTokenRevoked);
+      return new AuthDtos.DeleteAccountResponse(walletSub, removedProviders, true);
     } catch (AuthException e) {
       metrics.deleteFailure(e.getCode().name());
       throw e;
@@ -822,13 +959,14 @@ public class AuthService {
     }
   }
 
-  public AuthDtos.MeResponse bindProvider(String authorizationHeader, AuthDtos.BindRequest request, String deviceId) {
+  public AuthDtos.MeResponse bindProvider(
+      String authorizationHeader, AuthDtos.BindRequest request, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
     ensureBindEnabled();
     String walletSub = requireWalletSubFromAccessToken(authorizationHeader);
     riskService.checkBindRateLimit(walletSub);
 
-    AuthCodeRecord codeRecord = consumeValidAuthCode(request.authCode(), deviceId);
+    AuthCodeRecord codeRecord = consumeValidAuthCode(request.authCode(), deviceId, deviceProofKeyId);
     String providerSub = codeRecord.providerSub();
 
     Optional<String> existingOwner = store.getWalletSubByProviderSub(providerSub);
@@ -1008,6 +1146,7 @@ public class AuthService {
     String appRedirectUri;
     String nonce;
     String effectiveDeviceId = emptyToNull(deviceId);
+    String effectiveDeviceProofKeyId = null;
 
     String stateSecret = authProperties.getTg().getStateSecret();
     if (StringUtils.hasText(stateSecret) && TelegramOidcStateTokens.looksLikeToken(state)) {
@@ -1025,6 +1164,7 @@ public class AuthService {
       if (!StringUtils.hasText(effectiveDeviceId)) {
         effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
       }
+      effectiveDeviceProofKeyId = store.consumeOAuthStateProof(state).orElse(null);
     } else {
       OAuthStateRecord stateRecord =
           store
@@ -1045,11 +1185,12 @@ public class AuthService {
       if (!StringUtils.hasText(effectiveDeviceId)) {
         effectiveDeviceId = store.consumeOAuthStateDevice(state).orElse(null);
       }
+      effectiveDeviceProofKeyId = store.consumeOAuthStateProof(state).orElse(null);
     }
     if (!StringUtils.hasText(nonce)) {
       throw new AuthException(AuthErrorCode.OAUTH_STATE_INVALID, "oauth state invalid", 401);
     }
-    return new ResolvedTelegramLoginState(appRedirectUri, nonce, effectiveDeviceId);
+    return new ResolvedTelegramLoginState(appRedirectUri, nonce, effectiveDeviceId, effectiveDeviceProofKeyId);
   }
 
   private SyncFavorites mergeFavorites(
@@ -1168,7 +1309,15 @@ public class AuthService {
     return baseUrl;
   }
 
-  private AuthCodeRecord consumeValidAuthCode(String code, String deviceId) {
+  private static String requireRefreshDeviceId(String deviceId) {
+    String normalized = emptyToNull(deviceId);
+    if (!StringUtils.hasText(normalized)) {
+      throw new AuthException(AuthErrorCode.UNAUTHORIZED, "missing device id", 401);
+    }
+    return normalized;
+  }
+
+  private AuthCodeRecord consumeValidAuthCode(String code, String deviceId, String deviceProofKeyId) {
     long now = now();
     AuthCodeRecord record =
         store
@@ -1179,6 +1328,13 @@ public class AuthService {
     if (expectedDeviceId != null) {
       if (actualDeviceId == null || !expectedDeviceId.equals(actualDeviceId)) {
         throw new AuthException(AuthErrorCode.UNAUTHORIZED, "auth code device mismatch", 401);
+      }
+    }
+    String expectedDeviceProofKeyId = emptyToNull(record.deviceProofKeyId());
+    String actualDeviceProofKeyId = emptyToNull(deviceProofKeyId);
+    if (expectedDeviceProofKeyId != null) {
+      if (actualDeviceProofKeyId == null || !expectedDeviceProofKeyId.equals(actualDeviceProofKeyId)) {
+        throw new AuthException(AuthErrorCode.DEVICE_PROOF_INVALID, "auth code device proof mismatch", 401);
       }
     }
     long remainingMs = record.expiresAt() - now;
@@ -1200,6 +1356,7 @@ public class AuthService {
             record.providerUserId(),
             record.providerSub(),
             record.deviceId(),
+            record.deviceProofKeyId(),
             record.createdAt(),
             record.expiresAt(),
             now);
@@ -1245,7 +1402,11 @@ public class AuthService {
   }
 
   private AuthCodeRecord issueAuthCode(
-      AuthProvider provider, String providerUserId, String providerSub, String deviceId) {
+      AuthProvider provider,
+      String providerUserId,
+      String providerSub,
+      String deviceId,
+      String deviceProofKeyId) {
     long now = now();
     String normalizedDeviceId = emptyToNull(deviceId);
     if (!StringUtils.hasText(normalizedDeviceId)) {
@@ -1258,6 +1419,7 @@ public class AuthService {
             providerUserId,
             providerSub,
             normalizedDeviceId,
+            emptyToNull(deviceProofKeyId),
             now,
             now + authProperties.getOneTimeCodeTtlSeconds() * 1000,
             null);
@@ -1291,6 +1453,84 @@ public class AuthService {
       throw new AuthException(AuthErrorCode.ACCOUNT_DELETED, "account deleted", 401);
     }
     return claims;
+  }
+
+  private AuthJwtService.AccessTokenClaims resolveOptionalActiveAccessTokenClaims(String authorizationHeader) {
+    if (!StringUtils.hasText(authorizationHeader)) {
+      return null;
+    }
+    try {
+      return requireActiveAccessTokenClaims(authorizationHeader);
+    } catch (AuthException e) {
+      if (e.getCode() == AuthErrorCode.UNAUTHORIZED
+          || e.getCode() == AuthErrorCode.ACCESS_TOKEN_INVALID
+          || e.getCode() == AuthErrorCode.ACCESS_TOKEN_EXPIRED
+          || e.getCode() == AuthErrorCode.ACCOUNT_DELETED) {
+        log.info("optional access token ignored during token lifecycle operation: code={}", e.getCode());
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  private boolean revokeAccessTokenClaims(AuthJwtService.AccessTokenClaims claims, String reason) {
+    if (claims == null || !StringUtils.hasText(claims.jti())) {
+      return false;
+    }
+    long ttlSeconds = Math.max(1, (claims.expEpochMs() - now() + 999L) / 1000L);
+    store.revokeJti(claims.jti(), ttlSeconds);
+    log.info(
+        "access token revoked: walletSub={}, jti={}, reason={}, ttlSeconds={}",
+        claims.walletSub(),
+        claims.jti(),
+        reason,
+        ttlSeconds);
+    return true;
+  }
+
+  private RefreshTokenRecord requireOwnedActiveRefreshToken(
+      String refreshToken, String walletSub, String deviceId, String deviceProofKeyId) {
+    String normalizedRefreshToken = emptyToNull(refreshToken);
+    if (normalizedRefreshToken == null) {
+      throw new AuthException(AuthErrorCode.BAD_REQUEST, "refresh token missing", 400);
+    }
+    String actualDeviceId = requireRefreshDeviceId(deviceId);
+    String tokenHash = jwtService.sha256Hex(normalizedRefreshToken);
+    RefreshTokenRecord record =
+        store
+            .getRefreshTokenByHash(tokenHash)
+            .orElseThrow(() -> new AuthException(AuthErrorCode.REFRESH_TOKEN_INVALID, "invalid refresh token", 401));
+    if (record.revokedAt() != null || record.expiresAt() < now()) {
+      store.consumeRefreshTokenByHash(record.tokenHash());
+      throw new AuthException(AuthErrorCode.REFRESH_TOKEN_INVALID, "refresh token expired", 401);
+    }
+    if (!walletSub.equals(record.walletSub())) {
+      log.warn(
+          "refresh token rejected because wallet mismatch: expectedWalletSub={}, actualWalletSub={}, deviceId={}",
+          walletSub,
+          record.walletSub(),
+          actualDeviceId);
+      throw new AuthException(AuthErrorCode.REFRESH_TOKEN_INVALID, "invalid refresh token", 401);
+    }
+    String expectedDeviceId = emptyToNull(record.deviceId());
+    if (expectedDeviceId != null && !expectedDeviceId.equals(actualDeviceId)) {
+      log.warn(
+          "refresh token rejected because device mismatch: walletSub={}, expectedDeviceId={}, actualDeviceId={}",
+          walletSub,
+          expectedDeviceId,
+          actualDeviceId);
+      throw new AuthException(AuthErrorCode.REFRESH_TOKEN_INVALID, "invalid refresh token", 401);
+    }
+    String expectedDeviceProofKeyId = emptyToNull(record.deviceProofKeyId());
+    if (expectedDeviceProofKeyId != null && !expectedDeviceProofKeyId.equals(emptyToNull(deviceProofKeyId))) {
+      log.warn(
+          "refresh token rejected because device proof mismatch: walletSub={}, expectedKeyId={}, actualKeyId={}",
+          walletSub,
+          expectedDeviceProofKeyId,
+          emptyToNull(deviceProofKeyId));
+      throw new AuthException(AuthErrorCode.REFRESH_TOKEN_INVALID, "invalid refresh token", 401);
+    }
+    return record;
   }
 
   private String requireWalletSubFromAccessToken(String authorizationHeader) {
@@ -1403,7 +1643,9 @@ public class AuthService {
 
   public record XCallbackResult(AuthDtos.AuthCodeResponse payload, String appRedirectUri, String state) {}
 
-  public record TelegramWidgetStartContext(String appRedirectUri, String deviceId) {}
+  public record TelegramWidgetStartContext(
+      String appRedirectUri, String deviceId, String deviceProofKeyId) {}
 
-  private record ResolvedTelegramLoginState(String appRedirectUri, String nonce, String deviceId) {}
+  private record ResolvedTelegramLoginState(
+      String appRedirectUri, String nonce, String deviceId, String deviceProofKeyId) {}
 }

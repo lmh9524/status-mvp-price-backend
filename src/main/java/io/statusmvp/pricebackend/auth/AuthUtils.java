@@ -41,33 +41,63 @@ public final class AuthUtils {
     if (uri == null || uri.isBlank()) return false;
     if (prefixes == null || prefixes.isEmpty()) return false;
 
-    String normalized = uri.trim();
-    if (normalized.isEmpty()) return false;
-
+    URI candidate;
     try {
-      URI parsed = URI.create(normalized);
-      if (parsed.getScheme() == null || parsed.getScheme().isBlank()) return false;
+      candidate = URI.create(uri.trim());
     } catch (Exception e) {
       return false;
     }
+
+    String candidateScheme = normalizeScheme(candidate.getScheme());
+    String candidateHost = normalizeRedirectHost(candidate);
+    int candidatePort = normalizeRedirectPort(candidate);
+    String candidatePath = normalizeRedirectPath(candidate.getPath());
+    if (candidateScheme.isEmpty() || candidateHost.isEmpty()) return false;
 
     for (String prefix : prefixes) {
       if (prefix == null) continue;
       String p = prefix.trim();
       if (p.isEmpty()) continue;
 
-      if (normalized.equals(p)) return true;
-      if (p.endsWith("/") && normalized.startsWith(p)) return true;
-      if (!normalized.startsWith(p)) continue;
-      if (normalized.length() == p.length()) return true;
+      URI allowed;
+      try {
+        allowed = URI.create(p);
+      } catch (Exception e) {
+        continue;
+      }
 
-      char next = normalized.charAt(p.length());
-      // Prevent prefix confusion like `https://example.com.evil` when allowlist has `https://example.com`.
-      // Allow common URL continuations for paths / queries / fragments.
-      if (next == '/' || next == '?' || next == '#') return true;
+      if (!candidateScheme.equals(normalizeScheme(allowed.getScheme()))) continue;
+      if (!candidateHost.equals(normalizeRedirectHost(allowed))) continue;
+      if (candidatePort != normalizeRedirectPort(allowed)) continue;
+      if (!redirectPathMatches(candidatePath, normalizeRedirectPath(allowed.getPath()))) continue;
+      return true;
     }
 
     return false;
+  }
+
+  private static String normalizeRedirectHost(URI uri) {
+    if (uri == null) return "";
+    String host = uri.getHost();
+    if (host == null || host.isBlank()) return "";
+    return host.trim().toLowerCase(Locale.ROOT);
+  }
+
+  private static int normalizeRedirectPort(URI uri) {
+    if (uri == null) return -1;
+    return uri.getPort();
+  }
+
+  private static String normalizeRedirectPath(String value) {
+    String raw = value == null ? "" : value.trim();
+    if (raw.isEmpty() || "/".equals(raw)) return "/";
+    return raw.endsWith("/") ? raw.substring(0, raw.length() - 1) : raw;
+  }
+
+  private static boolean redirectPathMatches(String candidatePath, String allowedPath) {
+    if (candidatePath.equals(allowedPath)) return true;
+    if ("/".equals(allowedPath)) return true;
+    return candidatePath.startsWith(allowedPath + "/");
   }
 
   public static String normalizeIp(String ip) {

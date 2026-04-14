@@ -31,6 +31,7 @@ public class AuthProperties {
   private X x = new X();
   private Tg tg = new Tg();
   private Apple apple = new Apple();
+  private Integrity integrity = new Integrity();
   private Risk risk = new Risk();
 
   public boolean isEnabled() {
@@ -201,6 +202,14 @@ public class AuthProperties {
     this.apple = apple;
   }
 
+  public Integrity getIntegrity() {
+    return integrity;
+  }
+
+  public void setIntegrity(Integrity integrity) {
+    this.integrity = integrity;
+  }
+
   public Risk getRisk() {
     return risk;
   }
@@ -281,7 +290,7 @@ public class AuthProperties {
   public static class AppJwt {
     private String issuer = "status-mvp-price-backend";
     private String audience = "status-mvp-app";
-    private String secret = "replace-me-dev-secret-at-least-32-bytes";
+    private String secret = "";
 
     public String getIssuer() {
       return issuer;
@@ -570,6 +579,136 @@ public class AuthProperties {
 
     public List<String> audienceList() {
       return AuthProperties.splitCsv(audiences.replace(" ", ","));
+    }
+  }
+
+  public static class Integrity {
+    private boolean iosDeviceProofEnabled = true;
+    private boolean androidDeviceProofEnabled = true;
+    private boolean androidPlayIntegrityEnabled = true;
+    private String androidProtectedAuthAllowedChannels = "play";
+    private long deviceProofChallengeTtlSeconds = 60;
+    private long androidPlayIntegrityFreshnessSeconds = 180;
+    private String androidPlayIntegrityPackageName = "com.statusmvp";
+    private String androidPlayIntegrityServiceAccountEmail = "";
+    private String androidPlayIntegrityServiceAccountPrivateKeyPem = "";
+    private boolean iosAppAttestEnabled = true;
+    private long appAttestChallengeTtlSeconds = 60;
+    private long appAttestAssertionChallengeTtlSeconds = 60;
+    private String iosAllowedApplicationIdentifiers = "4592CM9497.com.veilwallet.app";
+
+    public boolean isIosDeviceProofEnabled() {
+      return iosDeviceProofEnabled;
+    }
+
+    public void setIosDeviceProofEnabled(boolean iosDeviceProofEnabled) {
+      this.iosDeviceProofEnabled = iosDeviceProofEnabled;
+    }
+
+    public boolean isAndroidDeviceProofEnabled() {
+      return androidDeviceProofEnabled;
+    }
+
+    public void setAndroidDeviceProofEnabled(boolean androidDeviceProofEnabled) {
+      this.androidDeviceProofEnabled = androidDeviceProofEnabled;
+    }
+
+    public boolean isAndroidPlayIntegrityEnabled() {
+      return androidPlayIntegrityEnabled;
+    }
+
+    public void setAndroidPlayIntegrityEnabled(boolean androidPlayIntegrityEnabled) {
+      this.androidPlayIntegrityEnabled = androidPlayIntegrityEnabled;
+    }
+
+    public String getAndroidProtectedAuthAllowedChannels() {
+      return androidProtectedAuthAllowedChannels;
+    }
+
+    public void setAndroidProtectedAuthAllowedChannels(String androidProtectedAuthAllowedChannels) {
+      this.androidProtectedAuthAllowedChannels = androidProtectedAuthAllowedChannels;
+    }
+
+    public long getDeviceProofChallengeTtlSeconds() {
+      return deviceProofChallengeTtlSeconds;
+    }
+
+    public void setDeviceProofChallengeTtlSeconds(long deviceProofChallengeTtlSeconds) {
+      this.deviceProofChallengeTtlSeconds = deviceProofChallengeTtlSeconds;
+    }
+
+    public long getAndroidPlayIntegrityFreshnessSeconds() {
+      return androidPlayIntegrityFreshnessSeconds;
+    }
+
+    public void setAndroidPlayIntegrityFreshnessSeconds(long androidPlayIntegrityFreshnessSeconds) {
+      this.androidPlayIntegrityFreshnessSeconds = androidPlayIntegrityFreshnessSeconds;
+    }
+
+    public List<String> androidProtectedAuthAllowedChannelsList() {
+      return AuthProperties.splitCsv(androidProtectedAuthAllowedChannels).stream()
+          .map(value -> value.toLowerCase(java.util.Locale.ROOT))
+          .collect(Collectors.toList());
+    }
+
+    public String getAndroidPlayIntegrityPackageName() {
+      return androidPlayIntegrityPackageName;
+    }
+
+    public void setAndroidPlayIntegrityPackageName(String androidPlayIntegrityPackageName) {
+      this.androidPlayIntegrityPackageName = androidPlayIntegrityPackageName;
+    }
+
+    public String getAndroidPlayIntegrityServiceAccountEmail() {
+      return androidPlayIntegrityServiceAccountEmail;
+    }
+
+    public void setAndroidPlayIntegrityServiceAccountEmail(String androidPlayIntegrityServiceAccountEmail) {
+      this.androidPlayIntegrityServiceAccountEmail = androidPlayIntegrityServiceAccountEmail;
+    }
+
+    public String getAndroidPlayIntegrityServiceAccountPrivateKeyPem() {
+      return androidPlayIntegrityServiceAccountPrivateKeyPem;
+    }
+
+    public void setAndroidPlayIntegrityServiceAccountPrivateKeyPem(String androidPlayIntegrityServiceAccountPrivateKeyPem) {
+      this.androidPlayIntegrityServiceAccountPrivateKeyPem = androidPlayIntegrityServiceAccountPrivateKeyPem;
+    }
+
+    public boolean isIosAppAttestEnabled() {
+      return iosAppAttestEnabled;
+    }
+
+    public void setIosAppAttestEnabled(boolean iosAppAttestEnabled) {
+      this.iosAppAttestEnabled = iosAppAttestEnabled;
+    }
+
+    public long getAppAttestChallengeTtlSeconds() {
+      return appAttestChallengeTtlSeconds;
+    }
+
+    public void setAppAttestChallengeTtlSeconds(long appAttestChallengeTtlSeconds) {
+      this.appAttestChallengeTtlSeconds = appAttestChallengeTtlSeconds;
+    }
+
+    public long getAppAttestAssertionChallengeTtlSeconds() {
+      return appAttestAssertionChallengeTtlSeconds;
+    }
+
+    public void setAppAttestAssertionChallengeTtlSeconds(long appAttestAssertionChallengeTtlSeconds) {
+      this.appAttestAssertionChallengeTtlSeconds = appAttestAssertionChallengeTtlSeconds;
+    }
+
+    public String getIosAllowedApplicationIdentifiers() {
+      return iosAllowedApplicationIdentifiers;
+    }
+
+    public void setIosAllowedApplicationIdentifiers(String iosAllowedApplicationIdentifiers) {
+      this.iosAllowedApplicationIdentifiers = iosAllowedApplicationIdentifiers;
+    }
+
+    public List<String> iosAllowedApplicationIdentifiersList() {
+      return AuthProperties.splitCsv(iosAllowedApplicationIdentifiers);
     }
   }
 

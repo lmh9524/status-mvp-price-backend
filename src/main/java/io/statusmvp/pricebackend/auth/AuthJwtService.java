@@ -32,25 +32,45 @@ import java.util.Map;
 import java.util.UUID;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AuthJwtService {
+  private static final Logger log = LoggerFactory.getLogger(AuthJwtService.class);
+  private static final String PLACEHOLDER_APP_JWT_SECRET = "replace-me-dev-secret-at-least-32-bytes";
+
   private final AuthProperties authProperties;
+  private final AuthRedisStore store;
   private final RSAPrivateKey web3AuthPrivateKey;
   private final RSAPublicKey web3AuthPublicKey;
   private final SecretKey appJwtSecret;
 
-  public AuthJwtService(AuthProperties authProperties) {
+  public AuthJwtService(AuthProperties authProperties, AuthRedisStore store) {
     this.authProperties = authProperties;
+    this.store = store;
     KeyPair pair = loadOrGenerateRsaKeyPair(authProperties.getWeb3auth().getPrivateKeyPem());
     this.web3AuthPrivateKey = (RSAPrivateKey) pair.getPrivate();
     this.web3AuthPublicKey = (RSAPublicKey) pair.getPublic();
-    byte[] secretBytes = authProperties.getAppJwt().getSecret().getBytes(StandardCharsets.UTF_8);
+    String configuredSecret = authProperties.getAppJwt().getSecret();
+    String normalizedSecret = configuredSecret == null ? "" : configuredSecret.trim();
+    if (normalizedSecret.isEmpty()) {
+      throw new IllegalStateException("AUTH_APP_JWT_SECRET is required and must not be empty");
+    }
+    if (PLACEHOLDER_APP_JWT_SECRET.equals(normalizedSecret)) {
+      throw new IllegalStateException("AUTH_APP_JWT_SECRET must be replaced with a real secret before startup");
+    }
+    byte[] secretBytes = normalizedSecret.getBytes(StandardCharsets.UTF_8);
     if (secretBytes.length < 32) {
       throw new IllegalStateException("AUTH_APP_JWT_SECRET must be at least 32 bytes");
     }
     this.appJwtSecret = new SecretKeySpec(secretBytes, "HmacSHA256");
+    log.info(
+        "[AuthJwtService] access token HMAC secret loaded issuer={} audience={} length={}",
+        authProperties.getAppJwt().getIssuer(),
+        authProperties.getAppJwt().getAudience(),
+        secretBytes.length);
   }
 
   public String issueWeb3AuthJwt(String providerSub, String nonce, long ttlSeconds) {
@@ -136,6 +156,12 @@ public class AuthJwtService {
         throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "invalid access token type", 401);
       }
       String jti = claims.getJWTID();
+      if (jti == null || jti.isBlank()) {
+        throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "access token jti missing", 401);
+      }
+      if (store.isJtiRevoked(jti)) {
+        throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "access token revoked", 401);
+      }
       return new AccessTokenClaims(
           subject,
           jti,
