@@ -586,7 +586,7 @@ public class AuthProperties {
     private boolean iosDeviceProofEnabled = true;
     private boolean androidDeviceProofEnabled = true;
     private boolean androidPlayIntegrityEnabled = true;
-    private String androidProtectedAuthAllowedChannels = "play";
+    private String androidProtectedAuthAllowedChannels = "play,direct";
     private long deviceProofChallengeTtlSeconds = 60;
     private long androidPlayIntegrityFreshnessSeconds = 180;
     private String androidPlayIntegrityPackageName = "com.statusmvp";
