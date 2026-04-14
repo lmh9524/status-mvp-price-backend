@@ -46,6 +46,7 @@ app:
     refreshTokenTtlSeconds: ${AUTH_REFRESH_TOKEN_TTL_SECONDS:2592000}
     siweNonceTtlSeconds: ${AUTH_SIWE_NONCE_TTL_SECONDS:600}
     siweStatement: ${AUTH_SIWE_STATEMENT:VeilWallet wants you to sign in.}
+    socialEnabled: ${AUTH_SOCIAL_ENABLED:false}
     xEnabled: ${AUTH_X_ENABLED:true}
     tgEnabled: ${AUTH_TG_ENABLED:true}
     appleEnabled: ${AUTH_APPLE_ENABLED:true}

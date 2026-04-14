@@ -17,6 +17,7 @@ public class AuthProperties {
   private long refreshTokenTtlSeconds = 2_592_000;
   private long siweNonceTtlSeconds = 600;
   private String siweStatement = "VeilWallet wants you to sign in.";
+  private boolean socialEnabled = false;
   private boolean xEnabled = true;
   private boolean tgEnabled = true;
   private boolean appleEnabled = true;
@@ -96,6 +97,14 @@ public class AuthProperties {
 
   public void setSiweStatement(String siweStatement) {
     this.siweStatement = siweStatement;
+  }
+
+  public boolean isSocialEnabled() {
+    return socialEnabled;
+  }
+
+  public void setSocialEnabled(boolean socialEnabled) {
+    this.socialEnabled = socialEnabled;
   }
 
   public boolean isXEnabled() {

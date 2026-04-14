@@ -3,10 +3,11 @@ set -euo pipefail
 
 BASE_URL="${1:?用法: prod-smoke.sh <base_url>}"
 DEVICE_ID="${SMOKE_DEVICE_ID:-prod-release-smoke}"
-APP_REDIRECT_URI="${APP_REDIRECT_URI:-veilwallet://openlogin}"
+APP_REDIRECT_URI="${APP_REDIRECT_URI:-veilwalletw3a://openlogin}"
 ANDROID_VERSION_CODE="${ANDROID_VERSION_CODE:-5}"
 ANDROID_PACKAGE_NAME="${ANDROID_PACKAGE_NAME:-com.statusmvp}"
 ANDROID_CHANNEL="${ANDROID_CHANNEL:-official}"
+SMOKE_SOCIAL_AUTH="${SMOKE_SOCIAL_AUTH:-false}"
 
 log() {
   printf '[prod-smoke] %s\n' "$*"
@@ -84,21 +85,27 @@ assert_json_shape \
   "/api/v1/app/android/update" \
   "assert 'hasUpdate' in payload and 'latestVersionCode' in payload and 'required' in payload, payload"
 
-x_start_payload="$(curl -fsS -H "X-Device-Id: $DEVICE_ID" --get \
-  --data-urlencode "appRedirectUri=$APP_REDIRECT_URI" \
-  "$BASE_URL/api/v1/auth/x/start")"
-assert_json_shape \
-  "$x_start_payload" \
-  "/api/v1/auth/x/start" \
-  "assert payload.get('authorizeUrl') and payload.get('state') and payload.get('expiresInSeconds', 0) > 0, payload"
+if [[ "$SMOKE_SOCIAL_AUTH" == "true" ]]; then
+  log "已启用社交登录 smoke，开始校验 X / Telegram 起始鉴权接口"
 
-tg_start_payload="$(curl -fsS -H "X-Device-Id: $DEVICE_ID" --get \
-  --data-urlencode "appRedirectUri=$APP_REDIRECT_URI" \
-  "$BASE_URL/api/v1/auth/tg/start")"
-assert_json_shape \
-  "$tg_start_payload" \
-  "/api/v1/auth/tg/start" \
-  "assert payload.get('authorizeUrl') and payload.get('state') and payload.get('expiresInSeconds', 0) > 0, payload"
+  x_start_payload="$(curl -fsS -H "X-Device-Id: $DEVICE_ID" --get \
+    --data-urlencode "appRedirectUri=$APP_REDIRECT_URI" \
+    "$BASE_URL/api/v1/auth/x/start")"
+  assert_json_shape \
+    "$x_start_payload" \
+    "/api/v1/auth/x/start" \
+    "assert payload.get('authorizeUrl') and payload.get('state') and payload.get('expiresInSeconds', 0) > 0, payload"
+
+  tg_start_payload="$(curl -fsS -H "X-Device-Id: $DEVICE_ID" --get \
+    --data-urlencode "appRedirectUri=$APP_REDIRECT_URI" \
+    "$BASE_URL/api/v1/auth/tg/start")"
+  assert_json_shape \
+    "$tg_start_payload" \
+    "/api/v1/auth/tg/start" \
+    "assert payload.get('authorizeUrl') and payload.get('state') and payload.get('expiresInSeconds', 0) > 0, payload"
+else
+  log "未启用社交登录 smoke，跳过 X / Telegram 起始鉴权接口校验"
+fi
 
 assert_http_ok_or_redirect "$BASE_URL/terms" "/terms"
 assert_http_ok_or_redirect "$BASE_URL/privacy" "/privacy"

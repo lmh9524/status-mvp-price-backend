@@ -608,6 +608,7 @@ public class AuthService {
   public AuthDtos.ExchangeResponse exchange(
       AuthDtos.ExchangeRequest request, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
+    ensureSocialEnabled();
     AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId, deviceProofKeyId);
     String providerSub = codeRecord.providerSub();
     String walletSub = resolveOrCreateWalletForProvider(codeRecord);
@@ -648,6 +649,7 @@ public class AuthService {
   public AuthDtos.Web3authJwtResponse web3authJwt(
       AuthDtos.ExchangeRequest request, String deviceId, String deviceProofKeyId) {
     ensureAuthEnabled();
+    ensureSocialEnabled();
     AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId, deviceProofKeyId);
     String providerSub = codeRecord.providerSub();
     String nonce = request.nonce();
@@ -1566,19 +1568,28 @@ public class AuthService {
     }
   }
 
+  private void ensureSocialEnabled() {
+    if (!authProperties.isSocialEnabled()) {
+      throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "social auth disabled", 403);
+    }
+  }
+
   private void ensureXEnabled() {
+    ensureSocialEnabled();
     if (!authProperties.isXEnabled()) {
       throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "x login disabled", 403);
     }
   }
 
   private void ensureTgEnabled() {
+    ensureSocialEnabled();
     if (!authProperties.isTgEnabled()) {
       throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "telegram login disabled", 403);
     }
   }
 
   private void ensureAppleEnabled() {
+    ensureSocialEnabled();
     if (!authProperties.isAppleEnabled()) {
       throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "apple login disabled", 403);
     }
@@ -1620,6 +1631,7 @@ public class AuthService {
   }
 
   private void ensureBindEnabled() {
+    ensureSocialEnabled();
     if (!authProperties.isBindEnabled()) {
       throw new AuthException(AuthErrorCode.FEATURE_DISABLED, "provider bind disabled", 403);
     }
