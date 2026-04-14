@@ -130,7 +130,7 @@ public class AnkrIndexerProxyService {
       return pageTokenValidation;
     }
 
-    return ValidationResult.valid();
+    return ValidationResult.ok();
   }
 
   private ValidationResult validateBlockchains(JsonNode blockchainNode) {
@@ -143,7 +143,7 @@ public class AnkrIndexerProxyService {
       if (!ALLOWED_BLOCKCHAINS.contains(blockchain)) {
         return ValidationResult.invalid("unsupported blockchain");
       }
-      return ValidationResult.valid();
+      return ValidationResult.ok();
     }
 
     if (!blockchainNode.isArray()) {
@@ -165,12 +165,12 @@ public class AnkrIndexerProxyService {
         return ValidationResult.invalid("unsupported blockchain");
       }
     }
-    return ValidationResult.valid();
+    return ValidationResult.ok();
   }
 
   private ValidationResult validatePageSize(JsonNode pageSizeNode) {
     if (pageSizeNode == null || pageSizeNode.isNull()) {
-      return ValidationResult.valid();
+      return ValidationResult.ok();
     }
     if (!pageSizeNode.canConvertToInt()) {
       return ValidationResult.invalid("pageSize must be an integer");
@@ -179,12 +179,12 @@ public class AnkrIndexerProxyService {
     if (pageSize < 1 || pageSize > MAX_PAGE_SIZE) {
       return ValidationResult.invalid("pageSize is out of range");
     }
-    return ValidationResult.valid();
+    return ValidationResult.ok();
   }
 
   private ValidationResult validatePageToken(JsonNode pageTokenNode) {
     if (pageTokenNode == null || pageTokenNode.isNull()) {
-      return ValidationResult.valid();
+      return ValidationResult.ok();
     }
     if (!pageTokenNode.isTextual()) {
       return ValidationResult.invalid("pageToken must be a string");
@@ -193,7 +193,7 @@ public class AnkrIndexerProxyService {
     if (pageToken.length() > MAX_PAGE_TOKEN_LENGTH) {
       return ValidationResult.invalid("pageToken is too long");
     }
-    return ValidationResult.valid();
+    return ValidationResult.ok();
   }
 
   private static String normalizeBaseUrl(String value) {
@@ -225,11 +225,11 @@ public class AnkrIndexerProxyService {
   }
 
   private record ValidationResult(boolean valid, String message) {
-    private static ValidationResult valid() {
+    static ValidationResult ok() {
       return new ValidationResult(true, "");
     }
 
-    private static ValidationResult invalid(String message) {
+    static ValidationResult invalid(String message) {
       return new ValidationResult(false, message);
     }
   }
