@@ -37,9 +37,9 @@ public final class AuthUtils {
     }
   }
 
-  public static boolean isAllowedRedirect(String uri, List<String> prefixes) {
+  public static boolean isAllowedRedirect(String uri, List<String> allowlist) {
     if (uri == null || uri.isBlank()) return false;
-    if (prefixes == null || prefixes.isEmpty()) return false;
+    if (allowlist == null || allowlist.isEmpty()) return false;
 
     URI candidate;
     try {
@@ -51,25 +51,27 @@ public final class AuthUtils {
     String candidateScheme = normalizeScheme(candidate.getScheme());
     String candidateHost = normalizeRedirectHost(candidate);
     int candidatePort = normalizeRedirectPort(candidate);
-    String candidatePath = normalizeRedirectPath(candidate.getPath());
-    if (candidateScheme.isEmpty() || candidateHost.isEmpty()) return false;
+    String candidateNormalized = normalizeRedirectUri(candidate);
+    if (candidateScheme.isEmpty() || candidateHost.isEmpty() || candidateNormalized.isEmpty()) return false;
 
-    for (String prefix : prefixes) {
-      if (prefix == null) continue;
-      String p = prefix.trim();
-      if (p.isEmpty()) continue;
+    for (String allowedValue : allowlist) {
+      if (allowedValue == null) continue;
+      String current = allowedValue.trim();
+      if (current.isEmpty()) continue;
 
       URI allowed;
       try {
-        allowed = URI.create(p);
+        allowed = URI.create(current);
       } catch (Exception e) {
         continue;
       }
 
+      String allowedNormalized = normalizeRedirectUri(allowed);
+      if (allowedNormalized.isEmpty()) continue;
       if (!candidateScheme.equals(normalizeScheme(allowed.getScheme()))) continue;
       if (!candidateHost.equals(normalizeRedirectHost(allowed))) continue;
       if (candidatePort != normalizeRedirectPort(allowed)) continue;
-      if (!redirectPathMatches(candidatePath, normalizeRedirectPath(allowed.getPath()))) continue;
+      if (!candidateNormalized.equals(allowedNormalized)) continue;
       return true;
     }
 
@@ -94,10 +96,29 @@ public final class AuthUtils {
     return raw.endsWith("/") ? raw.substring(0, raw.length() - 1) : raw;
   }
 
-  private static boolean redirectPathMatches(String candidatePath, String allowedPath) {
-    if (candidatePath.equals(allowedPath)) return true;
-    if ("/".equals(allowedPath)) return true;
-    return candidatePath.startsWith(allowedPath + "/");
+  private static String normalizeRedirectUri(URI uri) {
+    if (uri == null) return "";
+    String scheme = normalizeScheme(uri.getScheme());
+    String host = normalizeRedirectHost(uri);
+    if (scheme.isEmpty() || host.isEmpty()) return "";
+    String path = normalizeRedirectPath(uri.getPath());
+    StringBuilder out = new StringBuilder();
+    out.append(scheme).append("://").append(host);
+    if (uri.getPort() >= 0) {
+      out.append(':').append(uri.getPort());
+    }
+    if (!path.isEmpty()) {
+      out.append(path);
+    }
+    String query = uri.getQuery();
+    if (query != null && !query.isBlank()) {
+      out.append('?').append(query.trim());
+    }
+    String fragment = uri.getFragment();
+    if (fragment != null && !fragment.isBlank()) {
+      out.append('#').append(fragment.trim());
+    }
+    return out.toString();
   }
 
   public static String normalizeIp(String ip) {

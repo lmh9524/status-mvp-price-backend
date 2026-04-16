@@ -49,9 +49,11 @@ public class AuthJwtService {
   public AuthJwtService(AuthProperties authProperties, AuthRedisStore store) {
     this.authProperties = authProperties;
     this.store = store;
-    KeyPair pair = loadWeb3AuthRsaKeyPair(authProperties.getWeb3auth().getPrivateKeyPem(), authProperties.isSocialEnabled());
-    this.web3AuthPrivateKey = (RSAPrivateKey) pair.getPrivate();
-    this.web3AuthPublicKey = (RSAPublicKey) pair.getPublic();
+    KeyPair pair =
+        loadWeb3AuthRsaKeyPair(
+            authProperties.getWeb3auth().getPrivateKeyPem(), authProperties.isSocialEnabled());
+    this.web3AuthPrivateKey = pair == null ? null : (RSAPrivateKey) pair.getPrivate();
+    this.web3AuthPublicKey = pair == null ? null : (RSAPublicKey) pair.getPublic();
     String configuredSecret = authProperties.getAppJwt().getSecret();
     String normalizedSecret = configuredSecret == null ? "" : configuredSecret.trim();
     if (normalizedSecret.isEmpty()) {
@@ -73,6 +75,7 @@ public class AuthJwtService {
   }
 
   public String issueWeb3AuthJwt(String providerSub, String nonce, long ttlSeconds) {
+    requireWeb3AuthSigningEnabled();
     try {
       Instant now = Instant.now();
       SignedJWT jwt =
@@ -174,6 +177,7 @@ public class AuthJwtService {
   }
 
   public Map<String, Object> web3AuthJwksJson() {
+    requireWeb3AuthSigningEnabled();
     RSAKey key =
         new RSAKey.Builder(web3AuthPublicKey)
             .algorithm(JWSAlgorithm.RS256)
@@ -204,14 +208,20 @@ public class AuthJwtService {
           throw new IllegalStateException(
               "AUTH_WEB3AUTH_PRIVATE_KEY_PEM is required when AUTH_SOCIAL_ENABLED=true");
         }
-        throw new IllegalStateException(
-            "AUTH_WEB3AUTH_PRIVATE_KEY_PEM is required to expose a stable Web3Auth JWKS");
+        log.info("[AuthJwtService] social auth disabled, skip Web3Auth RSA key initialization");
+        return null;
       }
       RSAPrivateKey privateKey = parsePrivateKey(normalizedPem);
       RSAPublicKey publicKey = derivePublicKey(privateKey);
       return new KeyPair(publicKey, privateKey);
     } catch (Exception e) {
       throw new IllegalStateException("failed to initialize rsa key pair", e);
+    }
+  }
+
+  private void requireWeb3AuthSigningEnabled() {
+    if (web3AuthPrivateKey == null || web3AuthPublicKey == null) {
+      throw new IllegalStateException("Web3Auth signing is disabled because social auth is not configured");
     }
   }
 

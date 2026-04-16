@@ -65,7 +65,7 @@ services:
       AUTH_SOCIAL_ENABLED: ${AUTH_SOCIAL_ENABLED:-false}
       AUTH_ACCESS_TOKEN_TTL_SECONDS: ${AUTH_ACCESS_TOKEN_TTL_SECONDS:-900}
       AUTH_REFRESH_TOKEN_TTL_SECONDS: ${AUTH_REFRESH_TOKEN_TTL_SECONDS:-2592000}
-      AUTH_APP_REDIRECT_ALLOWLIST: ${AUTH_APP_REDIRECT_ALLOWLIST:-https://vex.veilx.global/openlogin,veilwalletw3a://openlogin}
+      AUTH_APP_REDIRECT_ALLOWLIST: ${AUTH_APP_REDIRECT_ALLOWLIST:-https://vex.veilx.global/openlogin,veilwalletw3a://openlogin,veilwallet://openlogin}
       AUTH_WEB3AUTH_ISSUER: ${AUTH_WEB3AUTH_ISSUER:-https://auth.status-mvp.local}
       AUTH_WEB3AUTH_AUDIENCE: ${AUTH_WEB3AUTH_AUDIENCE:-status-mvp}
       AUTH_WEB3AUTH_KEY_ID: ${AUTH_WEB3AUTH_KEY_ID:-status-mvp-auth-v1}

@@ -30,7 +30,7 @@ public class AuthConfigurationGuard {
     }
 
     String publicBaseUrl = normalizeAbsoluteUrl(authProperties.getPublicBaseUrl(), "AUTH_PUBLIC_BASE_URL");
-    List<String> appRedirectAllowlist = authProperties.appRedirectAllowPrefixes();
+    List<String> appRedirectAllowlist = authProperties.appRedirectAllowUris();
     if (appRedirectAllowlist.isEmpty()) {
       throw new IllegalStateException(
           "AUTH_APP_REDIRECT_ALLOWLIST must not be empty when AUTH_SOCIAL_ENABLED=true");

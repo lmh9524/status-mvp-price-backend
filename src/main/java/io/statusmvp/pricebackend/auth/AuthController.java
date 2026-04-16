@@ -45,7 +45,14 @@ public class AuthController {
 
   @GetMapping(path = "/.well-known/jwks.json", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<ResponseEntity<java.util.Map<String, Object>>> jwks() {
-    return Mono.fromCallable(() -> ResponseEntity.ok(authService.jwks()))
+    return Mono.fromCallable(
+            () -> {
+              if (!authProperties.isSocialEnabled()) {
+                java.util.Map<String, Object> emptyKeys = java.util.Map.of("keys", java.util.List.of());
+                return ResponseEntity.<java.util.Map<String, Object>>status(404).body(emptyKeys);
+              }
+              return ResponseEntity.ok(authService.jwks());
+            })
         .subscribeOn(Schedulers.boundedElastic());
   }
 

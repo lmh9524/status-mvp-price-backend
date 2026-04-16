@@ -227,7 +227,7 @@ public class AuthProperties {
     this.risk = risk;
   }
 
-  public List<String> appRedirectAllowPrefixes() {
+  public List<String> appRedirectAllowUris() {
     return splitCsv(appRedirectAllowlist);
   }
 

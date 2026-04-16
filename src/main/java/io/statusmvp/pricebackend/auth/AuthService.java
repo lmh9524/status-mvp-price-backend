@@ -1429,7 +1429,7 @@ public class AuthService {
 
   private void validateAppRedirect(String appRedirectUri) {
     if (!StringUtils.hasText(appRedirectUri)) return;
-    if (!AuthUtils.isAllowedRedirect(appRedirectUri, authProperties.appRedirectAllowPrefixes())) {
+    if (!AuthUtils.isAllowedRedirect(appRedirectUri, authProperties.appRedirectAllowUris())) {
       throw new AuthException(AuthErrorCode.BAD_REQUEST, "appRedirectUri not allowed", 400);
     }
   }
