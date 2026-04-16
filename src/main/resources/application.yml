@@ -72,7 +72,7 @@ app:
       iosDeviceProofEnabled: ${AUTH_IOS_DEVICE_PROOF_ENABLED:true}
       androidDeviceProofEnabled: ${AUTH_ANDROID_DEVICE_PROOF_ENABLED:true}
       androidPlayIntegrityEnabled: ${AUTH_ANDROID_PLAY_INTEGRITY_ENABLED:true}
-      androidProtectedAuthAllowedChannels: ${AUTH_ANDROID_PROTECTED_AUTH_ALLOWED_CHANNELS:play}
+      androidProtectedAuthAllowedChannels: ${AUTH_ANDROID_PROTECTED_AUTH_ALLOWED_CHANNELS:direct}
       deviceProofChallengeTtlSeconds: ${AUTH_DEVICE_PROOF_CHALLENGE_TTL_SECONDS:60}
       androidPlayIntegrityFreshnessSeconds: ${AUTH_ANDROID_PLAY_INTEGRITY_FRESHNESS_SECONDS:180}
       androidPlayIntegrityPackageName: ${AUTH_ANDROID_PLAY_INTEGRITY_PACKAGE_NAME:com.statusmvp}
