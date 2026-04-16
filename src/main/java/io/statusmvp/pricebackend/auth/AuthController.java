@@ -490,28 +490,6 @@ public class AuthController {
         .subscribeOn(Schedulers.boundedElastic());
   }
 
-  @PostMapping(path = "/api/v1/auth/web3auth/jwt", produces = MediaType.APPLICATION_JSON_VALUE)
-  public Mono<AuthDtos.Web3authJwtResponse> web3authJwt(
-      @Valid @RequestBody AuthDtos.ExchangeRequest request,
-      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
-      @RequestHeader(value = "X-App-Platform", required = false) String platform,
-      ServerWebExchange exchange) {
-    return Mono.fromCallable(
-            () -> {
-                requireSecureAndroidSocialAuthChannel(platform, exchange, "web3auth_jwt");
-                return authService.web3authJwt(
-                    request,
-                    deviceId,
-                    verifiedDeviceProofKeyId(
-                        deviceId,
-                        platform,
-                        "POST",
-                        "/api/v1/auth/web3auth/jwt",
-                        exchange));
-            })
-        .subscribeOn(Schedulers.boundedElastic());
-  }
-
   @PostMapping(path = "/api/v1/auth/siwe/nonce", produces = MediaType.APPLICATION_JSON_VALUE)
   public Mono<AuthDtos.SiweNonceResponse> siweNonce(
       @Valid @RequestBody AuthDtos.SiweNonceRequest request,

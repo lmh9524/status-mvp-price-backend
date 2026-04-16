@@ -646,19 +646,6 @@ public class AuthService {
         authProperties.getRefreshTokenTtlSeconds());
   }
 
-  public AuthDtos.Web3authJwtResponse web3authJwt(
-      AuthDtos.ExchangeRequest request, String deviceId, String deviceProofKeyId) {
-    ensureAuthEnabled();
-    ensureSocialEnabled();
-    AuthCodeRecord codeRecord = consumeValidAuthCode(request.code(), deviceId, deviceProofKeyId);
-    String providerSub = codeRecord.providerSub();
-    String nonce = request.nonce();
-    String web3authJwt =
-        jwtService.issueWeb3AuthJwt(providerSub, nonce, authProperties.getWeb3authJwtTtlSeconds());
-    return new AuthDtos.Web3authJwtResponse(
-        codeRecord.provider(), codeRecord.providerUserId(), providerSub, web3authJwt);
-  }
-
   public AuthDtos.SiweNonceResponse siweNonce(
       AuthDtos.SiweNonceRequest request,
       String ip,

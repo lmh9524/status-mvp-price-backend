@@ -17,7 +17,6 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.interfaces.RSAPrivateCrtKey;
@@ -50,7 +49,7 @@ public class AuthJwtService {
   public AuthJwtService(AuthProperties authProperties, AuthRedisStore store) {
     this.authProperties = authProperties;
     this.store = store;
-    KeyPair pair = loadOrGenerateRsaKeyPair(authProperties.getWeb3auth().getPrivateKeyPem());
+    KeyPair pair = loadWeb3AuthRsaKeyPair(authProperties.getWeb3auth().getPrivateKeyPem(), authProperties.isSocialEnabled());
     this.web3AuthPrivateKey = (RSAPrivateKey) pair.getPrivate();
     this.web3AuthPublicKey = (RSAPublicKey) pair.getPublic();
     String configuredSecret = authProperties.getAppJwt().getSecret();
@@ -197,16 +196,20 @@ public class AuthJwtService {
     }
   }
 
-  private static KeyPair loadOrGenerateRsaKeyPair(String pem) {
+  private static KeyPair loadWeb3AuthRsaKeyPair(String pem, boolean socialEnabled) {
     try {
-      if (pem != null && !pem.isBlank()) {
-        RSAPrivateKey privateKey = parsePrivateKey(pem);
-        RSAPublicKey publicKey = derivePublicKey(privateKey);
-        return new KeyPair(publicKey, privateKey);
+      String normalizedPem = pem == null ? "" : pem.trim();
+      if (normalizedPem.isEmpty()) {
+        if (socialEnabled) {
+          throw new IllegalStateException(
+              "AUTH_WEB3AUTH_PRIVATE_KEY_PEM is required when AUTH_SOCIAL_ENABLED=true");
+        }
+        throw new IllegalStateException(
+            "AUTH_WEB3AUTH_PRIVATE_KEY_PEM is required to expose a stable Web3Auth JWKS");
       }
-      KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-      generator.initialize(2048);
-      return generator.generateKeyPair();
+      RSAPrivateKey privateKey = parsePrivateKey(normalizedPem);
+      RSAPublicKey publicKey = derivePublicKey(privateKey);
+      return new KeyPair(publicKey, privateKey);
     } catch (Exception e) {
       throw new IllegalStateException("failed to initialize rsa key pair", e);
     }

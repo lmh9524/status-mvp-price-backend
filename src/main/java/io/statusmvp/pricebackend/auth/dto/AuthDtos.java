@@ -109,12 +109,6 @@ public final class AuthDtos {
       @JsonAlias("id_token")
       @NotBlank String idToken) {}
 
-  public record Web3authJwtResponse(
-      String provider,
-      String providerUserId,
-      String providerSub,
-      String web3authJwt) {}
-
   public record SiweNonceRequest(@NotBlank String address) {}
 
   public record SiweNonceResponse(

@@ -118,7 +118,6 @@ mvn spring-boot:run
 - Provider 绑定：`/api/v1/auth/providers/bind`、`/api/v1/auth/providers/unbind`
 - DApp 同步：`/api/v1/auth/sync/dapps`
 - SIWE：`/api/v1/auth/siwe/nonce`、`/api/v1/auth/siwe/verify`
-- Web3Auth JWT：`/api/v1/auth/web3auth/jwt`
 - JWKS：`/.well-known/jwks.json`
 
 ### Safe 协作与通知
