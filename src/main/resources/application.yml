@@ -46,6 +46,7 @@ app:
     refreshTokenTtlSeconds: ${AUTH_REFRESH_TOKEN_TTL_SECONDS:2592000}
     siweNonceTtlSeconds: ${AUTH_SIWE_NONCE_TTL_SECONDS:600}
     siweStatement: ${AUTH_SIWE_STATEMENT:VeilWallet wants you to sign in.}
+    socialEnabled: ${AUTH_SOCIAL_ENABLED:false}
     xEnabled: ${AUTH_X_ENABLED:true}
     tgEnabled: ${AUTH_TG_ENABLED:true}
     appleEnabled: ${AUTH_APPLE_ENABLED:true}
@@ -66,7 +67,21 @@ app:
     appJwt:
       issuer: ${AUTH_APP_JWT_ISSUER:status-mvp-price-backend}
       audience: ${AUTH_APP_JWT_AUDIENCE:status-mvp-app}
-      secret: ${AUTH_APP_JWT_SECRET:replace-me-dev-secret-at-least-32-bytes}
+      secret: ${AUTH_APP_JWT_SECRET:}
+    integrity:
+      iosDeviceProofEnabled: ${AUTH_IOS_DEVICE_PROOF_ENABLED:true}
+      androidDeviceProofEnabled: ${AUTH_ANDROID_DEVICE_PROOF_ENABLED:true}
+      androidPlayIntegrityEnabled: ${AUTH_ANDROID_PLAY_INTEGRITY_ENABLED:true}
+      androidProtectedAuthAllowedChannels: ${AUTH_ANDROID_PROTECTED_AUTH_ALLOWED_CHANNELS:direct}
+      deviceProofChallengeTtlSeconds: ${AUTH_DEVICE_PROOF_CHALLENGE_TTL_SECONDS:60}
+      androidPlayIntegrityFreshnessSeconds: ${AUTH_ANDROID_PLAY_INTEGRITY_FRESHNESS_SECONDS:180}
+      androidPlayIntegrityPackageName: ${AUTH_ANDROID_PLAY_INTEGRITY_PACKAGE_NAME:com.statusmvp}
+      androidPlayIntegrityServiceAccountEmail: ${AUTH_ANDROID_PLAY_INTEGRITY_SERVICE_ACCOUNT_EMAIL:}
+      androidPlayIntegrityServiceAccountPrivateKeyPem: ${AUTH_ANDROID_PLAY_INTEGRITY_SERVICE_ACCOUNT_PRIVATE_KEY_PEM:}
+      iosAppAttestEnabled: ${AUTH_IOS_APP_ATTEST_ENABLED:true}
+      appAttestChallengeTtlSeconds: ${AUTH_APP_ATTEST_CHALLENGE_TTL_SECONDS:60}
+      appAttestAssertionChallengeTtlSeconds: ${AUTH_APP_ATTEST_ASSERTION_CHALLENGE_TTL_SECONDS:60}
+      iosAllowedApplicationIdentifiers: ${AUTH_IOS_ALLOWED_APPLICATION_IDENTIFIERS:4592CM9497.com.veilwallet.app}
     x:
       clientId: ${AUTH_X_CLIENT_ID:}
       clientSecret: ${AUTH_X_CLIENT_SECRET:}
@@ -104,6 +119,22 @@ app:
       loginDeviceLimit: ${AUTH_RISK_LOGIN_DEVICE_LIMIT:30}
       bindAccountLimit: ${AUTH_RISK_BIND_ACCOUNT_LIMIT:20}
       windowSeconds: ${AUTH_RISK_WINDOW_SECONDS:60}
+  update:
+    android:
+      enabled: ${APP_UPDATE_ANDROID_ENABLED:false}
+      channel: ${APP_UPDATE_ANDROID_CHANNEL:official}
+      packageName: ${APP_UPDATE_ANDROID_PACKAGE_NAME:com.statusmvp}
+      manifestUrl: ${APP_UPDATE_ANDROID_MANIFEST_URL:}
+      manifestCacheTtlSeconds: ${APP_UPDATE_ANDROID_MANIFEST_CACHE_TTL_SECONDS:300}
+      latestVersionCode: ${APP_UPDATE_ANDROID_LATEST_VERSION_CODE:0}
+      latestVersionName: ${APP_UPDATE_ANDROID_LATEST_VERSION_NAME:}
+      minSupportedVersionCode: ${APP_UPDATE_ANDROID_MIN_SUPPORTED_VERSION_CODE:0}
+      required: ${APP_UPDATE_ANDROID_REQUIRED:false}
+      downloadUrl: ${APP_UPDATE_ANDROID_DOWNLOAD_URL:}
+      sha256: ${APP_UPDATE_ANDROID_SHA256:}
+      fileSizeBytes: ${APP_UPDATE_ANDROID_FILE_SIZE_BYTES:0}
+      releaseNotes: ${APP_UPDATE_ANDROID_RELEASE_NOTES:}
+      publishedAt: ${APP_UPDATE_ANDROID_PUBLISHED_AT:0}
   bridge:
     across:
       apiBaseUrl: ${BRIDGE_ACROSS_API_BASE_URL:https://app.across.to/api}
@@ -115,10 +146,16 @@ app:
       allowedTokenSymbols: ${BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS:ETH,USDC,USDT,DAI,USDC-BNB,USDT-BNB}
   portfolio:
     ankrBaseUrl: ${ANKR_BASE_URL:https://rpc.ankr.com/multichain}
-    ankrApiKey: ${ANKR_API_KEY:8ab456e0616fa58794745f952b83f719e7ea3af2d0c9cbac69b8f22323563de7}
+    ankrApiKey: ${ANKR_API_KEY:}
     timeoutMs: ${PORTFOLIO_TIMEOUT_MS:12000}
     requestTtlSeconds: ${PORTFOLIO_REQUEST_TTL_SECONDS:30}
-    defaultChainIds: ${PORTFOLIO_DEFAULT_CHAIN_IDS:1,10,56,8453,42161}
+    defaultChainIds: ${PORTFOLIO_DEFAULT_CHAIN_IDS:1,10,56,137,196,8453,42161}
+  uniswap:
+    apiBaseUrl: ${UNISWAP_API_BASE_URL:https://trade-api.gateway.uniswap.org/v1}
+    apiKey: ${UNISWAP_API_KEY:}
+    timeoutMs: ${UNISWAP_TIMEOUT_MS:12000}
+    rateLimitWindowSeconds: ${UNISWAP_RL_WINDOW_SECONDS:60}
+    rateLimitIpLimit: ${UNISWAP_RL_IP_LIMIT:600}
   bsc:
     rpcUrl: ${BSC_RPC_URL:}
   dex:

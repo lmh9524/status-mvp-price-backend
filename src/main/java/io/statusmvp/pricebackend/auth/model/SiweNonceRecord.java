@@ -5,6 +5,6 @@ public record SiweNonceRecord(
     String address,
     String domain,
     String uri,
+    String deviceProofKeyId,
     long issuedAt,
     long expiresAt) {}
-

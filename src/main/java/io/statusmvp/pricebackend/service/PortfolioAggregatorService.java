@@ -57,6 +57,8 @@ public class PortfolioAggregatorService {
           1, new ChainMeta("eth", "ETH"),
           10, new ChainMeta("optimism", "ETH"),
           56, new ChainMeta("bsc", "BNB"),
+          137, new ChainMeta("polygon", "POL"),
+          196, new ChainMeta("xlayer", "OKB"),
           8453, new ChainMeta("base", "ETH"),
           42161, new ChainMeta("arbitrum", "ETH"));
 
@@ -69,6 +71,7 @@ public class PortfolioAggregatorService {
           1, "ethereum",
           10, "optimism",
           56, "smartchain",
+          137, "polygon",
           8453, "base",
           42161, "arbitrum");
 
@@ -114,12 +117,11 @@ public class PortfolioAggregatorService {
       VeilxDexPriceService veilxDex,
       PriceAggregatorService priceAggregator,
       @Value("${app.portfolio.ankrBaseUrl:https://rpc.ankr.com/multichain}") String ankrBaseUrl,
-      @Value(
-              "${app.portfolio.ankrApiKey:8ab456e0616fa58794745f952b83f719e7ea3af2d0c9cbac69b8f22323563de7}")
+      @Value("${app.portfolio.ankrApiKey:}")
           String ankrApiKey,
       @Value("${app.portfolio.requestTtlSeconds:30}") long requestTtlSeconds,
       @Value("${app.portfolio.timeoutMs:12000}") long timeoutMs,
-      @Value("${app.portfolio.defaultChainIds:1,10,56,8453,42161}") String defaultChainIds) {
+      @Value("${app.portfolio.defaultChainIds:1,10,56,137,196,8453,42161}") String defaultChainIds) {
     this.webClient = webClient;
     this.cache = cache;
     this.bscWeb3j = Optional.ofNullable(bscWeb3jProvider.getIfAvailable());
@@ -1143,7 +1145,7 @@ public class PortfolioAggregatorService {
       if (!out.contains(id)) out.add(id);
     }
     if (out.isEmpty() && fallbackToDefaultWhenEmpty) {
-      out.addAll(defaultChainIds.isEmpty() ? List.of(1, 10, 56, 8453, 42161) : defaultChainIds);
+      out.addAll(defaultChainIds.isEmpty() ? List.of(1, 10, 56, 137, 196, 8453, 42161) : defaultChainIds);
     }
     return out;
   }
