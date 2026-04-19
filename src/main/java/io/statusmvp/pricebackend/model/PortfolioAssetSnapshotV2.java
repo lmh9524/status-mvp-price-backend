@@ -12,6 +12,6 @@ public record PortfolioAssetSnapshotV2(
     String balance,
     Double usdPrice,
     Double usdValue,
+    Double change24hPct,
     String logoUrl,
     Long blockNumber) {}
-

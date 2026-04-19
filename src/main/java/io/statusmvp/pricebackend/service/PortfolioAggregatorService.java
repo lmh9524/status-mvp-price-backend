@@ -57,6 +57,8 @@ public class PortfolioAggregatorService {
           1, new ChainMeta("eth", "ETH"),
           10, new ChainMeta("optimism", "ETH"),
           56, new ChainMeta("bsc", "BNB"),
+          137, new ChainMeta("polygon", "POL"),
+          196, new ChainMeta("xlayer", "OKB"),
           8453, new ChainMeta("base", "ETH"),
           42161, new ChainMeta("arbitrum", "ETH"));
 
@@ -69,6 +71,7 @@ public class PortfolioAggregatorService {
           1, "ethereum",
           10, "optimism",
           56, "smartchain",
+          137, "polygon",
           8453, "base",
           42161, "arbitrum");
 
@@ -114,12 +117,11 @@ public class PortfolioAggregatorService {
       VeilxDexPriceService veilxDex,
       PriceAggregatorService priceAggregator,
       @Value("${app.portfolio.ankrBaseUrl:https://rpc.ankr.com/multichain}") String ankrBaseUrl,
-      @Value(
-              "${app.portfolio.ankrApiKey:8ab456e0616fa58794745f952b83f719e7ea3af2d0c9cbac69b8f22323563de7}")
+      @Value("${app.portfolio.ankrApiKey:}")
           String ankrApiKey,
       @Value("${app.portfolio.requestTtlSeconds:30}") long requestTtlSeconds,
       @Value("${app.portfolio.timeoutMs:12000}") long timeoutMs,
-      @Value("${app.portfolio.defaultChainIds:1,10,56,8453,42161}") String defaultChainIds) {
+      @Value("${app.portfolio.defaultChainIds:1,10,56,137,196,8453,42161}") String defaultChainIds) {
     this.webClient = webClient;
     this.cache = cache;
     this.bscWeb3j = Optional.ofNullable(bscWeb3jProvider.getIfAvailable());
@@ -244,6 +246,7 @@ public class PortfolioAggregatorService {
             .orElse(new PortfolioSnapshotV2(normalizedAddress, now, cur, 0d, Map.of(), List.of()));
 
     snapshot = augmentSnapshotV2WithVeilTokens(snapshot, chainIds, filter);
+    snapshot = enrichSnapshotV2WithMarketData(snapshot, cur);
 
     try {
       cache.set(requestKey, mapper.writeValueAsString(snapshot), requestTtlSeconds);
@@ -412,6 +415,7 @@ public class PortfolioAggregatorService {
               balance,
               usdPrice,
               usdValue,
+              null,
               logoUrl,
               blockNumber));
     }
@@ -508,6 +512,7 @@ public class PortfolioAggregatorService {
     }
 
     Map<String, Double> usdPriceByChainContract = new HashMap<>();
+    Map<String, Double> change24hPctByChainContract = new HashMap<>();
     for (Map.Entry<Integer, List<String>> entry : contractAddressesByChainId.entrySet()) {
       Integer chainId = entry.getKey();
       List<String> contracts = entry.getValue();
@@ -518,9 +523,15 @@ public class PortfolioAggregatorService {
           if (quote == null) continue;
           String contract = normalizeBlankToNull(quote.contractAddress());
           Double price = positiveOrNull(quote.price());
-          if (contract == null || price == null) continue;
-          usdPriceByChainContract.put(
-              chainId + ":" + contract.toLowerCase(Locale.ROOT), price);
+          if (contract == null) continue;
+          if (price != null) {
+            usdPriceByChainContract.put(
+                chainId + ":" + contract.toLowerCase(Locale.ROOT), price);
+          }
+          if (quote.change24hPct() != null) {
+            change24hPctByChainContract.put(
+                chainId + ":" + contract.toLowerCase(Locale.ROOT), quote.change24hPct());
+          }
         }
       } catch (Exception e) {
         log.warn("portfolio snapshot contract fallback pricing failed: chainId={}", chainId, e);
@@ -528,6 +539,7 @@ public class PortfolioAggregatorService {
     }
 
     Map<String, Double> usdPriceBySymbol = new HashMap<>();
+    Map<String, Double> change24hPctBySymbol = new HashMap<>();
     if (!symbolFallbacks.isEmpty()) {
       try {
         List<PriceQuote> quotes = priceAggregator.getPrices(symbolFallbacks, "usd");
@@ -535,8 +547,13 @@ public class PortfolioAggregatorService {
           if (quote == null) continue;
           String symbolKey = normalizeUsdLookupSymbol(quote.symbol());
           Double price = positiveOrNull(quote.price());
-          if (symbolKey == null || price == null) continue;
-          usdPriceBySymbol.put(symbolKey, price);
+          if (symbolKey == null) continue;
+          if (price != null) {
+            usdPriceBySymbol.put(symbolKey, price);
+          }
+          if (quote.change24hPct() != null) {
+            change24hPctBySymbol.put(symbolKey, quote.change24hPct());
+          }
         }
       } catch (Exception e) {
         log.warn("portfolio snapshot symbol fallback pricing failed", e);
@@ -550,6 +567,7 @@ public class PortfolioAggregatorService {
 
       Double usdPrice = positiveOrNull(asset.usdPrice());
       Double usdValue = positiveOrNull(asset.usdValue());
+      Double change24hPct = asset.change24hPct();
 
       if (usdPrice == null && !asset.isNative()) {
         String contract = normalizeBlankToNull(asset.contractAddress());
@@ -558,13 +576,23 @@ public class PortfolioAggregatorService {
               positiveOrNull(
                   usdPriceByChainContract.get(
                       asset.chainId() + ":" + contract.toLowerCase(Locale.ROOT)));
+          if (change24hPct == null) {
+            change24hPct =
+                change24hPctByChainContract.get(
+                    asset.chainId() + ":" + contract.toLowerCase(Locale.ROOT));
+          }
         }
       }
 
-      if (usdPrice == null) {
+      if (usdPrice == null || change24hPct == null) {
         String symbolKey = resolveSymbolFallbackKey(asset);
         if (symbolKey != null) {
-          usdPrice = positiveOrNull(usdPriceBySymbol.get(symbolKey));
+          if (usdPrice == null) {
+            usdPrice = positiveOrNull(usdPriceBySymbol.get(symbolKey));
+          }
+          if (change24hPct == null) {
+            change24hPct = change24hPctBySymbol.get(symbolKey);
+          }
         }
       }
 
@@ -574,9 +602,11 @@ public class PortfolioAggregatorService {
 
       Double originalUsdPrice = positiveOrNull(asset.usdPrice());
       Double originalUsdValue = positiveOrNull(asset.usdValue());
+      Double originalChange24hPct = asset.change24hPct();
       if (
           equalsNullableDouble(originalUsdPrice, usdPrice)
-              && equalsNullableDouble(originalUsdValue, usdValue)) {
+              && equalsNullableDouble(originalUsdValue, usdValue)
+              && equalsNullableDouble(originalChange24hPct, change24hPct)) {
         out.add(asset);
         continue;
       }
@@ -595,11 +625,125 @@ public class PortfolioAggregatorService {
               asset.balance(),
               usdPrice,
               usdValue,
+              change24hPct,
               asset.logoUrl(),
               asset.blockNumber()));
     }
 
     return changed ? out : assets;
+  }
+
+  private PortfolioSnapshotV2 enrichSnapshotV2WithMarketData(
+      PortfolioSnapshotV2 snapshot, String currency) {
+    if (snapshot == null || snapshot.assets() == null || snapshot.assets().isEmpty()) return snapshot;
+    if (priceAggregator == null || !"usd".equals(normalizeCurrency(currency))) return snapshot;
+
+    Map<Integer, List<String>> contractAddressesByChainId = new LinkedHashMap<>();
+    List<String> symbolFallbacks = new ArrayList<>();
+    for (PortfolioAssetSnapshotV2 asset : snapshot.assets()) {
+      if (asset == null) continue;
+      if (!asset.isNative()) {
+        String contract = normalizeBlankToNull(asset.contractAddress());
+        if (contract != null) {
+          List<String> list =
+              contractAddressesByChainId.computeIfAbsent(asset.chainId(), ignored -> new ArrayList<>());
+          if (!list.contains(contract)) {
+            list.add(contract);
+          }
+        }
+      }
+      String symbolKey = resolveSymbolFallbackKey(asset);
+      if (symbolKey != null && !symbolFallbacks.contains(symbolKey)) {
+        symbolFallbacks.add(symbolKey);
+      }
+    }
+
+    Map<String, Double> change24hPctByChainContract = new HashMap<>();
+    for (Map.Entry<Integer, List<String>> entry : contractAddressesByChainId.entrySet()) {
+      Integer chainId = entry.getKey();
+      List<String> addresses = entry.getValue();
+      if (chainId == null || addresses == null || addresses.isEmpty()) continue;
+      try {
+        List<PriceQuote> quotes = priceAggregator.getPricesByContract(chainId, addresses, "usd");
+        for (PriceQuote quote : quotes) {
+          if (quote == null || quote.change24hPct() == null) continue;
+          String contract = normalizeBlankToNull(quote.contractAddress());
+          if (contract == null) continue;
+          change24hPctByChainContract.put(
+              buildContractChangeKey(chainId, contract), quote.change24hPct());
+        }
+      } catch (Exception e) {
+        log.warn("portfolio snapshot market-data enrich failed for chainId={}", chainId, e);
+      }
+    }
+
+    Map<String, Double> change24hPctBySymbol = new HashMap<>();
+    if (!symbolFallbacks.isEmpty()) {
+      try {
+        List<PriceQuote> quotes = priceAggregator.getPrices(symbolFallbacks, "usd");
+        for (PriceQuote quote : quotes) {
+          if (quote == null || quote.change24hPct() == null) continue;
+          String symbolKey = normalizeUsdLookupSymbol(quote.symbol());
+          if (symbolKey == null) continue;
+          change24hPctBySymbol.put(symbolKey, quote.change24hPct());
+        }
+      } catch (Exception e) {
+        log.warn("portfolio snapshot symbol market-data enrich failed", e);
+      }
+    }
+
+    boolean changed = false;
+    List<PortfolioAssetSnapshotV2> nextAssets = new ArrayList<>(snapshot.assets().size());
+    for (PortfolioAssetSnapshotV2 asset : snapshot.assets()) {
+      if (asset == null) continue;
+      Double change24hPct = asset.change24hPct();
+      if (change24hPct == null) {
+        if (!asset.isNative()) {
+          String contract = normalizeBlankToNull(asset.contractAddress());
+          if (contract != null) {
+            change24hPct =
+                change24hPctByChainContract.get(buildContractChangeKey(asset.chainId(), contract));
+          }
+        }
+        if (change24hPct == null) {
+          String symbolKey = resolveSymbolFallbackKey(asset);
+          if (symbolKey != null) {
+            change24hPct = change24hPctBySymbol.get(symbolKey);
+          }
+        }
+      }
+
+      if (equalsNullableDouble(asset.change24hPct(), change24hPct)) {
+        nextAssets.add(asset);
+        continue;
+      }
+      changed = true;
+      nextAssets.add(
+          new PortfolioAssetSnapshotV2(
+              asset.chainId(),
+              asset.blockchain(),
+              asset.isNative(),
+              asset.contractAddress(),
+              asset.symbol(),
+              asset.name(),
+              asset.decimals(),
+              asset.balanceRaw(),
+              asset.balance(),
+              asset.usdPrice(),
+              asset.usdValue(),
+              change24hPct,
+              asset.logoUrl(),
+              asset.blockNumber()));
+    }
+
+    if (!changed) return snapshot;
+    return new PortfolioSnapshotV2(
+        snapshot.address(),
+        snapshot.fetchedAt(),
+        snapshot.currency(),
+        snapshot.totalUsd(),
+        snapshot.blockNumbersByChainId(),
+        nextAssets);
   }
 
   private PortfolioSnapshotV2 augmentSnapshotV2WithVeilTokens(
@@ -741,6 +885,7 @@ public class PortfolioAggregatorService {
             balance,
             usdPrice,
             usdValue,
+            null,
             logoUrl,
             null);
 
@@ -976,6 +1121,18 @@ public class PortfolioAggregatorService {
     return a;
   }
 
+  private static String buildContractChangeKey(Integer chainId, String contractAddress) {
+    String contract = normalizeBlankToNull(contractAddress);
+    if (contract == null || chainId == null) return null;
+    if (chainId == 195 || chainId == 501) {
+      return chainId + ":" + contract;
+    }
+    if (contract.startsWith("0x") && contract.length() >= 42) {
+      return chainId + ":" + contract.toLowerCase(Locale.ROOT);
+    }
+    return chainId + ":" + contract;
+  }
+
   private List<Integer> normalizeChainIds(List<Integer> requestedChainIds, boolean fallbackToDefaultWhenEmpty) {
     List<Integer> source = requestedChainIds == null ? List.of() : requestedChainIds;
     if (source.isEmpty() && fallbackToDefaultWhenEmpty) {
@@ -988,7 +1145,7 @@ public class PortfolioAggregatorService {
       if (!out.contains(id)) out.add(id);
     }
     if (out.isEmpty() && fallbackToDefaultWhenEmpty) {
-      out.addAll(defaultChainIds.isEmpty() ? List.of(1, 10, 56, 8453, 42161) : defaultChainIds);
+      out.addAll(defaultChainIds.isEmpty() ? List.of(1, 10, 56, 137, 196, 8453, 42161) : defaultChainIds);
     }
     return out;
   }

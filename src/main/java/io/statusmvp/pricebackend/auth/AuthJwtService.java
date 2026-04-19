@@ -17,7 +17,6 @@ import java.math.BigInteger;
 import java.nio.charset.StandardCharsets;
 import java.security.KeyFactory;
 import java.security.KeyPair;
-import java.security.KeyPairGenerator;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.security.interfaces.RSAPrivateCrtKey;
@@ -32,28 +31,51 @@ import java.util.Map;
 import java.util.UUID;
 import javax.crypto.SecretKey;
 import javax.crypto.spec.SecretKeySpec;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class AuthJwtService {
+  private static final Logger log = LoggerFactory.getLogger(AuthJwtService.class);
+  private static final String PLACEHOLDER_APP_JWT_SECRET = "replace-me-dev-secret-at-least-32-bytes";
+
   private final AuthProperties authProperties;
+  private final AuthRedisStore store;
   private final RSAPrivateKey web3AuthPrivateKey;
   private final RSAPublicKey web3AuthPublicKey;
   private final SecretKey appJwtSecret;
 
-  public AuthJwtService(AuthProperties authProperties) {
+  public AuthJwtService(AuthProperties authProperties, AuthRedisStore store) {
     this.authProperties = authProperties;
-    KeyPair pair = loadOrGenerateRsaKeyPair(authProperties.getWeb3auth().getPrivateKeyPem());
-    this.web3AuthPrivateKey = (RSAPrivateKey) pair.getPrivate();
-    this.web3AuthPublicKey = (RSAPublicKey) pair.getPublic();
-    byte[] secretBytes = authProperties.getAppJwt().getSecret().getBytes(StandardCharsets.UTF_8);
+    this.store = store;
+    KeyPair pair =
+        loadWeb3AuthRsaKeyPair(
+            authProperties.getWeb3auth().getPrivateKeyPem(), authProperties.isSocialEnabled());
+    this.web3AuthPrivateKey = pair == null ? null : (RSAPrivateKey) pair.getPrivate();
+    this.web3AuthPublicKey = pair == null ? null : (RSAPublicKey) pair.getPublic();
+    String configuredSecret = authProperties.getAppJwt().getSecret();
+    String normalizedSecret = configuredSecret == null ? "" : configuredSecret.trim();
+    if (normalizedSecret.isEmpty()) {
+      throw new IllegalStateException("AUTH_APP_JWT_SECRET is required and must not be empty");
+    }
+    if (PLACEHOLDER_APP_JWT_SECRET.equals(normalizedSecret)) {
+      throw new IllegalStateException("AUTH_APP_JWT_SECRET must be replaced with a real secret before startup");
+    }
+    byte[] secretBytes = normalizedSecret.getBytes(StandardCharsets.UTF_8);
     if (secretBytes.length < 32) {
       throw new IllegalStateException("AUTH_APP_JWT_SECRET must be at least 32 bytes");
     }
     this.appJwtSecret = new SecretKeySpec(secretBytes, "HmacSHA256");
+    log.info(
+        "[AuthJwtService] access token HMAC secret loaded issuer={} audience={} length={}",
+        authProperties.getAppJwt().getIssuer(),
+        authProperties.getAppJwt().getAudience(),
+        secretBytes.length);
   }
 
   public String issueWeb3AuthJwt(String providerSub, String nonce, long ttlSeconds) {
+    requireWeb3AuthSigningEnabled();
     try {
       Instant now = Instant.now();
       SignedJWT jwt =
@@ -136,6 +158,12 @@ public class AuthJwtService {
         throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "invalid access token type", 401);
       }
       String jti = claims.getJWTID();
+      if (jti == null || jti.isBlank()) {
+        throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "access token jti missing", 401);
+      }
+      if (store.isJtiRevoked(jti)) {
+        throw new AuthException(AuthErrorCode.ACCESS_TOKEN_INVALID, "access token revoked", 401);
+      }
       return new AccessTokenClaims(
           subject,
           jti,
@@ -149,6 +177,7 @@ public class AuthJwtService {
   }
 
   public Map<String, Object> web3AuthJwksJson() {
+    requireWeb3AuthSigningEnabled();
     RSAKey key =
         new RSAKey.Builder(web3AuthPublicKey)
             .algorithm(JWSAlgorithm.RS256)
@@ -171,18 +200,28 @@ public class AuthJwtService {
     }
   }
 
-  private static KeyPair loadOrGenerateRsaKeyPair(String pem) {
+  private static KeyPair loadWeb3AuthRsaKeyPair(String pem, boolean socialEnabled) {
     try {
-      if (pem != null && !pem.isBlank()) {
-        RSAPrivateKey privateKey = parsePrivateKey(pem);
-        RSAPublicKey publicKey = derivePublicKey(privateKey);
-        return new KeyPair(publicKey, privateKey);
+      String normalizedPem = pem == null ? "" : pem.trim();
+      if (normalizedPem.isEmpty()) {
+        if (socialEnabled) {
+          throw new IllegalStateException(
+              "AUTH_WEB3AUTH_PRIVATE_KEY_PEM is required when AUTH_SOCIAL_ENABLED=true");
+        }
+        log.info("[AuthJwtService] social auth disabled, skip Web3Auth RSA key initialization");
+        return null;
       }
-      KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
-      generator.initialize(2048);
-      return generator.generateKeyPair();
+      RSAPrivateKey privateKey = parsePrivateKey(normalizedPem);
+      RSAPublicKey publicKey = derivePublicKey(privateKey);
+      return new KeyPair(publicKey, privateKey);
     } catch (Exception e) {
       throw new IllegalStateException("failed to initialize rsa key pair", e);
+    }
+  }
+
+  private void requireWeb3AuthSigningEnabled() {
+    if (web3AuthPrivateKey == null || web3AuthPublicKey == null) {
+      throw new IllegalStateException("Web3Auth signing is disabled because social auth is not configured");
     }
   }
 

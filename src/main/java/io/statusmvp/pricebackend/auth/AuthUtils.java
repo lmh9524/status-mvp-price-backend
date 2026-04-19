@@ -37,37 +37,88 @@ public final class AuthUtils {
     }
   }
 
-  public static boolean isAllowedRedirect(String uri, List<String> prefixes) {
+  public static boolean isAllowedRedirect(String uri, List<String> allowlist) {
     if (uri == null || uri.isBlank()) return false;
-    if (prefixes == null || prefixes.isEmpty()) return false;
+    if (allowlist == null || allowlist.isEmpty()) return false;
 
-    String normalized = uri.trim();
-    if (normalized.isEmpty()) return false;
-
+    URI candidate;
     try {
-      URI parsed = URI.create(normalized);
-      if (parsed.getScheme() == null || parsed.getScheme().isBlank()) return false;
+      candidate = URI.create(uri.trim());
     } catch (Exception e) {
       return false;
     }
 
-    for (String prefix : prefixes) {
-      if (prefix == null) continue;
-      String p = prefix.trim();
-      if (p.isEmpty()) continue;
+    String candidateScheme = normalizeScheme(candidate.getScheme());
+    String candidateHost = normalizeRedirectHost(candidate);
+    int candidatePort = normalizeRedirectPort(candidate);
+    String candidateNormalized = normalizeRedirectUri(candidate);
+    if (candidateScheme.isEmpty() || candidateHost.isEmpty() || candidateNormalized.isEmpty()) return false;
 
-      if (normalized.equals(p)) return true;
-      if (p.endsWith("/") && normalized.startsWith(p)) return true;
-      if (!normalized.startsWith(p)) continue;
-      if (normalized.length() == p.length()) return true;
+    for (String allowedValue : allowlist) {
+      if (allowedValue == null) continue;
+      String current = allowedValue.trim();
+      if (current.isEmpty()) continue;
 
-      char next = normalized.charAt(p.length());
-      // Prevent prefix confusion like `https://example.com.evil` when allowlist has `https://example.com`.
-      // Allow common URL continuations for paths / queries / fragments.
-      if (next == '/' || next == '?' || next == '#') return true;
+      URI allowed;
+      try {
+        allowed = URI.create(current);
+      } catch (Exception e) {
+        continue;
+      }
+
+      String allowedNormalized = normalizeRedirectUri(allowed);
+      if (allowedNormalized.isEmpty()) continue;
+      if (!candidateScheme.equals(normalizeScheme(allowed.getScheme()))) continue;
+      if (!candidateHost.equals(normalizeRedirectHost(allowed))) continue;
+      if (candidatePort != normalizeRedirectPort(allowed)) continue;
+      if (!candidateNormalized.equals(allowedNormalized)) continue;
+      return true;
     }
 
     return false;
+  }
+
+  private static String normalizeRedirectHost(URI uri) {
+    if (uri == null) return "";
+    String host = uri.getHost();
+    if (host == null || host.isBlank()) return "";
+    return host.trim().toLowerCase(Locale.ROOT);
+  }
+
+  private static int normalizeRedirectPort(URI uri) {
+    if (uri == null) return -1;
+    return uri.getPort();
+  }
+
+  private static String normalizeRedirectPath(String value) {
+    String raw = value == null ? "" : value.trim();
+    if (raw.isEmpty() || "/".equals(raw)) return "/";
+    return raw.endsWith("/") ? raw.substring(0, raw.length() - 1) : raw;
+  }
+
+  private static String normalizeRedirectUri(URI uri) {
+    if (uri == null) return "";
+    String scheme = normalizeScheme(uri.getScheme());
+    String host = normalizeRedirectHost(uri);
+    if (scheme.isEmpty() || host.isEmpty()) return "";
+    String path = normalizeRedirectPath(uri.getPath());
+    StringBuilder out = new StringBuilder();
+    out.append(scheme).append("://").append(host);
+    if (uri.getPort() >= 0) {
+      out.append(':').append(uri.getPort());
+    }
+    if (!path.isEmpty()) {
+      out.append(path);
+    }
+    String query = uri.getQuery();
+    if (query != null && !query.isBlank()) {
+      out.append('?').append(query.trim());
+    }
+    String fragment = uri.getFragment();
+    if (fragment != null && !fragment.isBlank()) {
+      out.append('#').append(fragment.trim());
+    }
+    return out.toString();
   }
 
   public static String normalizeIp(String ip) {
