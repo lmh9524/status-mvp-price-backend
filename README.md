@@ -100,6 +100,14 @@ mvn spring-boot:run
 
 用于把 Across 支持链、支持代币和 allowlist 下发给移动端，减少频繁发版。
 
+默认建议配置为：
+
+- 固定 `BRIDGE_ACROSS_ALLOWED_CHAIN_IDS`
+- `BRIDGE_ACROSS_ALLOWLIST_MODE=STRICT`
+- `BRIDGE_ACROSS_TOKEN_ALLOWLIST_MODE=ALL_ON_ALLOWED_CHAINS`
+
+这样可以保持链范围稳定，同时让固定链上的 Across 可桥接币种随目录自动扩容。
+
 ### Solana Jupiter 代理
 
 - `GET /api/v1/solana/jupiter/quote`
@@ -197,6 +205,15 @@ mvn spring-boot:run
 - 允许的链 / 代币范围
 - 缓存 TTL
 - 速率限制
+
+Across 相关常用配置：
+
+- `BRIDGE_ACROSS_ALLOWLIST_MODE`
+- `BRIDGE_ACROSS_TOKEN_ALLOWLIST_MODE`
+- `BRIDGE_ACROSS_ALLOWED_CHAIN_IDS`
+- `BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS`
+
+其中 `BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS` 只在 `BRIDGE_ACROSS_TOKEN_ALLOWLIST_MODE=STRICT` 时生效。
 
 ### Auth
 
