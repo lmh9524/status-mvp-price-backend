@@ -161,13 +161,11 @@ public class PortfolioAggregatorService {
       }
     }
 
+    SnapshotFilter summaryFilter = new SnapshotFilter(0d, true, V1_SUMMARY_SNAPSHOT_LIMIT);
     Optional<PortfolioSnapshotV2> summarySource =
-        fetchSnapshotV2FromAnkr(
-            normalizedAddress,
-            chainIds,
-            "usd",
-            now,
-            new SnapshotFilter(0d, true, V1_SUMMARY_SNAPSHOT_LIMIT));
+        fetchSnapshotV2FromAnkr(normalizedAddress, chainIds, "usd", now, summaryFilter);
+    summarySource =
+        summarySource.map(snapshot -> augmentSnapshotV2WithVeilTokens(snapshot, chainIds, summaryFilter));
 
     List<PortfolioChainSummary> chains = buildPortfolioChainSummaries(chainIds, summarySource.orElse(null));
     Double totalFromSnapshot =
