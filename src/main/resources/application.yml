@@ -133,7 +133,13 @@ app:
     ankrApiKey: ${ANKR_API_KEY:}
     timeoutMs: ${PORTFOLIO_TIMEOUT_MS:12000}
     requestTtlSeconds: ${PORTFOLIO_REQUEST_TTL_SECONDS:30}
-    defaultChainIds: ${PORTFOLIO_DEFAULT_CHAIN_IDS:1,10,56,8453,42161}
+    defaultChainIds: ${PORTFOLIO_DEFAULT_CHAIN_IDS:1,10,56,137,196,8453,42161}
+  uniswap:
+    apiBaseUrl: ${UNISWAP_API_BASE_URL:https://trade-api.gateway.uniswap.org/v1}
+    apiKey: ${UNISWAP_API_KEY:}
+    timeoutMs: ${UNISWAP_TIMEOUT_MS:12000}
+    rateLimitWindowSeconds: ${UNISWAP_RL_WINDOW_SECONDS:60}
+    rateLimitIpLimit: ${UNISWAP_RL_IP_LIMIT:600}
   bsc:
     rpcUrl: ${BSC_RPC_URL:}
   dex:

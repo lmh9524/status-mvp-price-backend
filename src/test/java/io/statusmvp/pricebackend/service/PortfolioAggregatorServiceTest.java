@@ -53,7 +53,7 @@ class PortfolioAggregatorServiceTest {
             "",
             30,
             3000,
-            "1,10,56,8453,42161");
+            "1,10,56,137,196,8453,42161");
   }
 
   @Test
@@ -76,6 +76,12 @@ class PortfolioAggregatorServiceTest {
     assertEquals(2, snapshot.chains().size());
     assertEquals(0.0, snapshot.totalUsd());
     assertTrue(snapshot.fetchedAt() > 0);
+  }
+
+  @Test
+  void emptyChainIdsFallbackIncludesPolygonAndXLayer() {
+    PortfolioSnapshot snapshot = service.getPortfolio(VALID_ADDRESS, List.of());
+    assertEquals(List.of(1, 10, 56, 137, 196, 8453, 42161), snapshot.chains().stream().map(io.statusmvp.pricebackend.model.PortfolioChainSummary::chainId).toList());
   }
 
   @Test

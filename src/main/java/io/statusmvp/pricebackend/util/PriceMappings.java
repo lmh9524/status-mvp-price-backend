@@ -44,6 +44,7 @@ public final class PriceMappings {
           Map.entry("NEAR", "near"),
           Map.entry("APT", "aptos"),
           Map.entry("BNB", "binancecoin"),
+          Map.entry("OKB", "okb"),
           Map.entry("MATIC", "matic-network"),
           Map.entry("POL", "polygon-ecosystem-token"),
           Map.entry("FTM", "fantom"),
@@ -92,6 +93,7 @@ public final class PriceMappings {
           Map.entry(56, "binance-smart-chain"),
           Map.entry(195, "tron"),
           Map.entry(137, "polygon-pos"),
+          Map.entry(196, "x-layer"),
           Map.entry(501, "solana"),
           Map.entry(42161, "arbitrum-one"),
           Map.entry(8453, "base"),
@@ -107,4 +109,3 @@ public final class PriceMappings {
           Map.entry(42161, "arbitrum"),
           Map.entry(8453, "base"));
 }
-
