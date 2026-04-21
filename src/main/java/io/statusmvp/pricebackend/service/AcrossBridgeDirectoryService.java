@@ -78,6 +78,22 @@ public class AcrossBridgeDirectoryService {
     }
   }
 
+  private enum TokenAllowlistMode {
+    STRICT,
+    ALL_ON_ALLOWED_CHAINS;
+
+    static TokenAllowlistMode parse(String raw) {
+      if (raw == null) return ALL_ON_ALLOWED_CHAINS;
+      String v = raw.trim().toUpperCase(Locale.ROOT);
+      if (v.isBlank()) return ALL_ON_ALLOWED_CHAINS;
+      if ("STRICT".equals(v)) return STRICT;
+      if ("FULL".equals(v) || "ALL".equals(v) || "ALL_ON_ALLOWED_CHAINS".equals(v)) {
+        return ALL_ON_ALLOWED_CHAINS;
+      }
+      return ALL_ON_ALLOWED_CHAINS;
+    }
+  }
+
   private final WebClient webClient;
   private final RedisCache cache;
   private final ObjectMapper mapper = new ObjectMapper();
@@ -87,6 +103,7 @@ public class AcrossBridgeDirectoryService {
   private final long chainsCacheTtlSeconds;
   private final long routesCacheTtlSeconds;
   private final AllowlistMode allowlistMode;
+  private final TokenAllowlistMode tokenAllowlistMode;
   private final List<Long> allowedChainIds;
   private final List<String> allowedTokenSymbolsList;
   private final Set<String> allowedTokenSymbolsSet;
@@ -99,6 +116,7 @@ public class AcrossBridgeDirectoryService {
       @Value("${app.bridge.across.chainsCacheTtlSeconds:300}") long chainsCacheTtlSeconds,
       @Value("${app.bridge.across.routesCacheTtlSeconds:60}") long routesCacheTtlSeconds,
       @Value("${app.bridge.across.allowlistMode:STRICT}") String allowlistMode,
+      @Value("${app.bridge.across.tokenAllowlistMode:ALL_ON_ALLOWED_CHAINS}") String tokenAllowlistMode,
       @Value("${app.bridge.across.allowedChainIds:1,10,42161,8453,56}") String allowedChainIds,
       @Value("${app.bridge.across.allowedTokenSymbols:ETH,USDC,USDT,DAI,USDC-BNB,USDT-BNB}") String allowedTokenSymbols) {
     this.webClient = webClient;
@@ -108,6 +126,7 @@ public class AcrossBridgeDirectoryService {
     this.chainsCacheTtlSeconds = Math.max(5L, chainsCacheTtlSeconds);
     this.routesCacheTtlSeconds = Math.max(5L, routesCacheTtlSeconds);
     this.allowlistMode = AllowlistMode.parse(allowlistMode);
+    this.tokenAllowlistMode = TokenAllowlistMode.parse(tokenAllowlistMode);
     this.allowedChainIds = parseChainIds(allowedChainIds);
     this.allowedTokenSymbolsList = parseSymbolsUpperList(allowedTokenSymbols);
     this.allowedTokenSymbolsSet = new HashSet<>(allowedTokenSymbolsList);
@@ -126,19 +145,7 @@ public class AcrossBridgeDirectoryService {
         if (id > 0 && chainSeen.add(id)) chainIds.add(id);
       }
 
-      Set<String> tokenSymbolsSet = new HashSet<>();
-      for (Route r : routes) {
-        String in = r.inputTokenSymbol();
-        String out = r.outputTokenSymbol();
-        if (in != null && !in.isBlank()) tokenSymbolsSet.add(upper(in));
-        if (out != null && !out.isBlank()) tokenSymbolsSet.add(upper(out));
-      }
-      for (Chain c : chains) {
-        for (Token t : c.inputTokens()) tokenSymbolsSet.add(upper(t.symbol()));
-        for (Token t : c.outputTokens()) tokenSymbolsSet.add(upper(t.symbol()));
-      }
-      List<String> tokenSymbols = new ArrayList<>(tokenSymbolsSet);
-      Collections.sort(tokenSymbols);
+      List<String> tokenSymbols = collectTokenSymbols(chains, routes);
 
       return new BridgeAcrossDirectoryResponse(
           now, new BridgeAcrossDirectoryResponse.Allowlist(chainIds, tokenSymbols), chains, routes);
@@ -146,6 +153,14 @@ public class AcrossBridgeDirectoryService {
 
     List<Long> chainAllow =
         allowedChainIds.isEmpty() ? List.of(1L, 10L, 42161L, 8453L, 56L) : allowedChainIds;
+    if (tokenAllowlistMode == TokenAllowlistMode.ALL_ON_ALLOWED_CHAINS) {
+      List<Chain> chains = fetchAndFilterChains(chainAllow, null);
+      List<Route> routes = fetchAndFilterRoutes(chainAllow, null);
+      List<String> tokenSymbols = collectTokenSymbols(chains, routes);
+      return new BridgeAcrossDirectoryResponse(
+          now, new BridgeAcrossDirectoryResponse.Allowlist(chainAllow, tokenSymbols), chains, routes);
+    }
+
     List<String> tokenAllowList =
         allowedTokenSymbolsList.isEmpty()
             ? List.of("ETH", "USDC", "USDT", "DAI", "USDC-BNB", "USDT-BNB")
@@ -158,6 +173,23 @@ public class AcrossBridgeDirectoryService {
 
     return new BridgeAcrossDirectoryResponse(
         now, new BridgeAcrossDirectoryResponse.Allowlist(chainAllow, tokenAllowList), chains, routes);
+  }
+
+  static List<String> collectTokenSymbols(List<Chain> chains, List<Route> routes) {
+    Set<String> tokenSymbolsSet = new HashSet<>();
+    for (Route r : routes) {
+      String in = r.inputTokenSymbol();
+      String out = r.outputTokenSymbol();
+      if (in != null && !in.isBlank()) tokenSymbolsSet.add(upper(in));
+      if (out != null && !out.isBlank()) tokenSymbolsSet.add(upper(out));
+    }
+    for (Chain c : chains) {
+      for (Token t : c.inputTokens()) tokenSymbolsSet.add(upper(t.symbol()));
+      for (Token t : c.outputTokens()) tokenSymbolsSet.add(upper(t.symbol()));
+    }
+    List<String> tokenSymbols = new ArrayList<>(tokenSymbolsSet);
+    Collections.sort(tokenSymbols);
+    return tokenSymbols;
   }
 
   private List<Chain> fetchAndFilterChains(List<Long> chainAllow, Set<String> tokenAllow) {
