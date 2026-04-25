@@ -141,9 +141,13 @@ app:
       timeoutMs: ${BRIDGE_ACROSS_TIMEOUT_MS:12000}
       chainsCacheTtlSeconds: ${BRIDGE_ACROSS_CHAINS_CACHE_TTL_SECONDS:300}
       routesCacheTtlSeconds: ${BRIDGE_ACROSS_ROUTES_CACHE_TTL_SECONDS:60}
-      allowlistMode: ${BRIDGE_ACROSS_ALLOWLIST_MODE:STRICT}
+      allowlistMode: ${BRIDGE_ACROSS_ALLOWLIST_MODE:FULL}
       allowedChainIds: ${BRIDGE_ACROSS_ALLOWED_CHAIN_IDS:1,10,42161,8453,56}
       allowedTokenSymbols: ${BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS:ETH,USDC,USDT,DAI,USDC-BNB,USDT-BNB}
+    relay:
+      apiBaseUrl: ${BRIDGE_RELAY_API_BASE_URL:https://api.relay.link}
+      apiKey: ${BRIDGE_RELAY_API_KEY:}
+      timeoutMs: ${BRIDGE_RELAY_TIMEOUT_MS:12000}
   portfolio:
     ankrBaseUrl: ${ANKR_BASE_URL:https://rpc.ankr.com/multichain}
     ankrApiKey: ${ANKR_API_KEY:}
