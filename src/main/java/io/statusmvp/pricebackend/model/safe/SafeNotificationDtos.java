@@ -36,6 +36,8 @@ public final class SafeNotificationDtos {
       String safeTxHash,
       int confirmationsSubmitted,
       int confirmationsRequired,
+      String transactionHash,
+      String eventState,
       String createdAt) {}
 
   public record PullResponse(

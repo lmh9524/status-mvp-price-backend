@@ -58,8 +58,22 @@ public class SafeNotificationService {
   private static final String TRANSPORT_PULL_LOCAL = "pull_local_notification";
   private static final String TRANSPORT_REMOTE_PUSH = "remote_push";
   private static final String FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
+  static final String TYPE_TRANSACTION_PROPOSED = "TRANSACTION_PROPOSED";
+  static final String TYPE_CONFIRMATION_REQUEST = "CONFIRMATION_REQUEST";
+  static final String TYPE_TRANSACTION_CONFIRMED = "TRANSACTION_CONFIRMED";
+  static final String TYPE_READY_TO_EXECUTE = "READY_TO_EXECUTE";
+  static final String TYPE_EXECUTION_FAILED = "EXECUTION_FAILED";
+  private static final String TYPE_OBSERVED_ONLY = "OBSERVED_ONLY";
+  private static final String STATUS_PENDING = "pending";
+  private static final String STATUS_READY = "ready";
+  private static final String STATUS_FAILED = "failed";
   private static final List<String> DEFAULT_NOTIFICATION_TYPES =
-      List.of("CONFIRMATION_REQUEST", "READY_TO_EXECUTE");
+      List.of(
+          TYPE_TRANSACTION_PROPOSED,
+          TYPE_CONFIRMATION_REQUEST,
+          TYPE_TRANSACTION_CONFIRMED,
+          TYPE_READY_TO_EXECUTE,
+          TYPE_EXECUTION_FAILED);
 
   private final StringRedisTemplate redis;
   private final ObjectMapper objectMapper;
@@ -240,9 +254,9 @@ public class SafeNotificationService {
                         subscription.chainId(), subscription.safeAddress(), subscription.ownerAddresses()))
             .toList();
 
-    List<SafeCollaborationDtos.InboxItem> inboxItems =
+    List<SafeCollaborationService.SafeNotificationCandidate> candidates =
         collaborationService
-            .queryInboxItemsForSafes(items, perDeviceInboxLimit, "", "safe-notifier:" + deviceUuid)
+            .queryNotificationCandidatesForSafes(items, perDeviceInboxLimit, "", "safe-notifier:" + deviceUuid)
             .blockOptional(Duration.ofSeconds(20))
             .orElse(List.of());
 
@@ -253,30 +267,37 @@ public class SafeNotificationService {
       subscriptionBySafeId.put(safeId(subscription.chainId(), subscription.safeAddress()), subscription);
     }
 
-    for (SafeCollaborationDtos.InboxItem item : inboxItems) {
-      String notificationType = notificationTypeForAction(item.action());
-      if (notificationType == null) {
-        continue;
-      }
+    for (SafeCollaborationService.SafeNotificationCandidate candidate : candidates) {
       SubscriptionRecord subscription =
-          subscriptionBySafeId.get(safeId(item.chainId(), item.safeAddress()));
-      if (subscription == null || !subscription.notificationTypes().contains(notificationType)) {
+          subscriptionBySafeId.get(safeId(candidate.chainId(), candidate.safeAddress()));
+      if (subscription == null) {
         continue;
       }
 
-      String stateKey = stateKey(item.chainId(), item.safeTxHash());
-      currentStates.put(stateKey, notificationType);
-      String previous = previousStates.get(stateKey);
-      if (!notificationType.equals(previous)) {
+      String stateKey = stateKey(candidate.chainId(), candidate.safeTxHash());
+      NotificationState previous = parseNotificationState(previousStates.get(stateKey));
+      List<String> candidateTypes = notificationTypesForTransition(candidate, previous);
+      String notificationType = firstSubscribedType(candidateTypes, subscription.notificationTypes());
+      String eventState = buildNotificationStateToken(
+          notificationType == null ? TYPE_OBSERVED_ONLY : notificationType,
+          statusForCandidate(candidate),
+          candidate.confirmationsSubmitted(),
+          candidate.confirmationsRequired(),
+          candidate.transactionHash());
+      currentStates.put(stateKey, eventState);
+
+      if (notificationType != null && !eventState.equals(previous.raw())) {
         NotificationRecord record =
             new NotificationRecord(
                 UUID.randomUUID().toString(),
                 notificationType,
-                item.chainId(),
-                item.safeAddress(),
-                item.safeTxHash(),
-                item.confirmationsSubmitted(),
-                item.confirmationsRequired(),
+                candidate.chainId(),
+                candidate.safeAddress(),
+                candidate.safeTxHash(),
+                candidate.confirmationsSubmitted(),
+                candidate.confirmationsRequired(),
+                normalizeToken(candidate.transactionHash()),
+                eventState,
                 Instant.now().toString());
         if (!dispatchRemoteNotification(deviceRecord, record)) {
           enqueueNotification(deviceUuid, record);
@@ -441,7 +462,7 @@ public class SafeNotificationService {
           continue;
         }
         String currentState = currentStates.get(stateKey(record.chainId(), record.safeTxHash()));
-        if (!record.notificationType().equals(currentState)) {
+        if (!notificationRecordMatchesCurrentState(record, currentState)) {
           continue;
         }
         items.add(
@@ -453,6 +474,8 @@ public class SafeNotificationService {
                 record.safeTxHash(),
                 record.confirmationsSubmitted(),
                 record.confirmationsRequired(),
+                record.transactionHash(),
+                record.eventState(),
                 record.createdAt()));
         if (items.size() >= limit) {
           break;
@@ -560,15 +583,30 @@ public class SafeNotificationService {
   private PushContent buildPushContent(NotificationRecord record) {
     String safeShort = shortAddress(record.safeAddress(), 6, 4);
     String hashShort = shortAddress(record.safeTxHash(), 10, 6);
+    String progress = record.confirmationsSubmitted() + "/" + record.confirmationsRequired();
     String title =
-        "CONFIRMATION_REQUEST".equals(record.notificationType())
-            ? "Safe confirmation needed"
-            : "Safe transaction ready";
+        switch (record.notificationType()) {
+          case TYPE_TRANSACTION_PROPOSED -> "New Safe proposal";
+          case TYPE_CONFIRMATION_REQUEST -> "Safe confirmation needed";
+          case TYPE_TRANSACTION_CONFIRMED -> "Safe proposal confirmed";
+          case TYPE_READY_TO_EXECUTE -> "Safe transaction ready";
+          case TYPE_EXECUTION_FAILED -> "Safe execution failed";
+          default -> "Safe update";
+        };
     String body =
-        "CONFIRMATION_REQUEST".equals(record.notificationType())
-            ? "Safe " + safeShort + " · " + hashShort + " needs your confirmation ("
-                + record.confirmationsSubmitted() + "/" + record.confirmationsRequired() + ")."
-            : "Safe " + safeShort + " · " + hashShort + " reached threshold and is ready to execute.";
+        switch (record.notificationType()) {
+          case TYPE_TRANSACTION_PROPOSED ->
+              "Safe " + safeShort + " · " + hashShort + " was proposed (" + progress + ").";
+          case TYPE_CONFIRMATION_REQUEST ->
+              "Safe " + safeShort + " · " + hashShort + " needs your confirmation (" + progress + ").";
+          case TYPE_TRANSACTION_CONFIRMED ->
+              "Safe " + safeShort + " · " + hashShort + " received a confirmation (" + progress + ").";
+          case TYPE_READY_TO_EXECUTE ->
+              "Safe " + safeShort + " · " + hashShort + " reached threshold and is ready to execute.";
+          case TYPE_EXECUTION_FAILED ->
+              "Safe " + safeShort + " · " + hashShort + " execution failed. Review the transaction details.";
+          default -> "Safe " + safeShort + " · " + hashShort + " has an update.";
+        };
     return new PushContent(title, body, buildSafeDeepLink(record));
   }
 
@@ -582,6 +620,8 @@ public class SafeNotificationService {
                 Map.of(
                     "notificationId", record.id(),
                     "notificationType", record.notificationType(),
+                    "eventState", normalizeToken(record.eventState()),
+                    "transactionHash", normalizeToken(record.transactionHash()),
                     "safeDeepLink", content.deepLink(),
                     "title", content.title(),
                     "body", content.body()),
@@ -617,6 +657,8 @@ public class SafeNotificationService {
                     "sound", "default"),
             "notificationId", record.id(),
             "notificationType", record.notificationType(),
+            "eventState", normalizeToken(record.eventState()),
+            "transactionHash", normalizeToken(record.transactionHash()),
             "safeDeepLink", content.deepLink());
 
     String host = apnsUseSandbox ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
@@ -715,6 +757,156 @@ public class SafeNotificationService {
     cachedApnsJwt = signedJwt.serialize();
     cachedApnsJwtExpiresAt = now.plus(50, ChronoUnit.MINUTES);
     return cachedApnsJwt;
+  }
+
+  static List<String> notificationTypesForTransition(
+      SafeCollaborationService.SafeNotificationCandidate candidate, NotificationState previous) {
+    if (candidate == null) {
+      return List.of();
+    }
+    String status = statusForCandidate(candidate);
+    if (STATUS_FAILED.equals(status)) {
+      return stateAlreadyRepresents(previous, STATUS_FAILED, candidate)
+          ? List.of()
+          : List.of(TYPE_EXECUTION_FAILED);
+    }
+    if (STATUS_READY.equals(status)) {
+      return stateAlreadyRepresents(previous, STATUS_READY, candidate)
+          ? List.of()
+          : List.of(TYPE_READY_TO_EXECUTE);
+    }
+
+    if (previous == null || previous.raw().isBlank()) {
+      return List.of(TYPE_TRANSACTION_PROPOSED, TYPE_CONFIRMATION_REQUEST);
+    }
+    if (!previous.versioned()) {
+      return List.of();
+    }
+    if (candidate.confirmationsSubmitted() > previous.confirmationsSubmitted()) {
+      return List.of(TYPE_TRANSACTION_CONFIRMED, TYPE_CONFIRMATION_REQUEST);
+    }
+    return List.of();
+  }
+
+  static String buildNotificationStateToken(
+      String eventType,
+      String status,
+      int confirmationsSubmitted,
+      int confirmationsRequired,
+      String transactionHash) {
+    String normalizedEventType = normalizeToken(eventType).isBlank() ? TYPE_OBSERVED_ONLY : normalizeToken(eventType);
+    String normalizedStatus = normalizeToken(status).isBlank() ? STATUS_PENDING : normalizeToken(status);
+    String normalizedTxHash = stateTransactionHash(transactionHash);
+    return "v2:"
+        + normalizedEventType
+        + ":"
+        + normalizedStatus
+        + ":"
+        + Math.max(0, confirmationsSubmitted)
+        + ":"
+        + Math.max(0, confirmationsRequired)
+        + ":"
+        + normalizedTxHash;
+  }
+
+  static NotificationState parseNotificationState(String raw) {
+    String value = normalizeToken(raw);
+    if (value.isBlank()) {
+      return new NotificationState("", "", "", -1, -1, "", false);
+    }
+    if (!value.startsWith("v2:")) {
+      return new NotificationState(value, value, "", -1, -1, "", false);
+    }
+
+    String[] parts = value.split(":", 6);
+    String eventType = parts.length > 1 ? parts[1] : "";
+    String status = parts.length > 2 ? parts[2] : "";
+    int confirmationsSubmitted = parseNonNegativeInt(parts.length > 3 ? parts[3] : "");
+    int confirmationsRequired = parseNonNegativeInt(parts.length > 4 ? parts[4] : "");
+    String transactionHash = parts.length > 5 ? parts[5] : "";
+    return new NotificationState(
+        value,
+        eventType,
+        status,
+        confirmationsSubmitted,
+        confirmationsRequired,
+        transactionHash,
+        true);
+  }
+
+  private static boolean notificationRecordMatchesCurrentState(
+      NotificationRecord record, String currentState) {
+    if (record == null) {
+      return false;
+    }
+    NotificationState state = parseNotificationState(currentState);
+    if (state.raw().isBlank()) {
+      return false;
+    }
+    String eventState = normalizeToken(record.eventState());
+    if (!eventState.isBlank()) {
+      return eventState.equals(state.raw());
+    }
+    return normalizeToken(record.notificationType()).equals(state.eventType());
+  }
+
+  private static boolean stateAlreadyRepresents(
+      NotificationState previous,
+      String status,
+      SafeCollaborationService.SafeNotificationCandidate candidate) {
+    if (previous == null || previous.raw().isBlank()) {
+      return false;
+    }
+    if (!previous.versioned()) {
+      if (STATUS_READY.equals(status)) {
+        return TYPE_READY_TO_EXECUTE.equals(previous.eventType());
+      }
+      if (STATUS_FAILED.equals(status)) {
+        return TYPE_EXECUTION_FAILED.equals(previous.eventType());
+      }
+      return false;
+    }
+    return status.equals(previous.status())
+        && candidate.confirmationsSubmitted() == previous.confirmationsSubmitted()
+        && candidate.confirmationsRequired() == previous.confirmationsRequired()
+        && stateTransactionHash(candidate.transactionHash()).equals(previous.transactionHash());
+  }
+
+  private static String firstSubscribedType(List<String> candidateTypes, List<String> subscriptionTypes) {
+    if (candidateTypes == null || candidateTypes.isEmpty()) {
+      return null;
+    }
+    List<String> normalizedSubscriptionTypes = normalizeNotificationTypes(subscriptionTypes);
+    for (String type : candidateTypes) {
+      if (normalizedSubscriptionTypes.contains(type)) {
+        return type;
+      }
+    }
+    return null;
+  }
+
+  private static String statusForCandidate(SafeCollaborationService.SafeNotificationCandidate candidate) {
+    if (candidate.executionFailed()) {
+      return STATUS_FAILED;
+    }
+    if (candidate.confirmationsRequired() > 0
+        && candidate.confirmationsSubmitted() >= candidate.confirmationsRequired()) {
+      return STATUS_READY;
+    }
+    return STATUS_PENDING;
+  }
+
+  private static int parseNonNegativeInt(String raw) {
+    try {
+      return Math.max(0, Integer.parseInt(normalizeToken(raw)));
+    } catch (Exception ignored) {
+      return -1;
+    }
+  }
+
+  private static String stateTransactionHash(String transactionHash) {
+    String normalized = normalizeToken(transactionHash).toLowerCase(Locale.ROOT);
+    return normalized.isBlank() ? "-" : normalized;
   }
 
   private List<SubscriptionRecord> normalizeSubscriptions(List<SafeNotificationDtos.SafeSubscription> safes) {
@@ -823,16 +1015,6 @@ public class SafeNotificationService {
       return null;
     }
     return trimmed.toLowerCase(Locale.ROOT);
-  }
-
-  private static String notificationTypeForAction(String action) {
-    if ("needs_confirmation".equals(action)) {
-      return "CONFIRMATION_REQUEST";
-    }
-    if ("ready_to_execute".equals(action)) {
-      return "READY_TO_EXECUTE";
-    }
-    return null;
   }
 
   private static String safeId(int chainId, String safeAddress) {
@@ -976,5 +1158,16 @@ public class SafeNotificationService {
       String safeTxHash,
       int confirmationsSubmitted,
       int confirmationsRequired,
+      String transactionHash,
+      String eventState,
       String createdAt) {}
+
+  record NotificationState(
+      String raw,
+      String eventType,
+      String status,
+      int confirmationsSubmitted,
+      int confirmationsRequired,
+      String transactionHash,
+      boolean versioned) {}
 }

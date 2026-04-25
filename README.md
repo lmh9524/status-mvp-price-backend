@@ -136,6 +136,7 @@ mvn spring-boot:run
 - 通知拉取：`POST /api/v1/safe/notifications/v1/pull`
 - 清理订阅：`POST /api/v1/safe/notifications/v1/subscriptions/delete-all`
 - 删除设备：`DELETE /api/v1/safe/notifications/v1/devices/{deviceUuid}`
+- 通知类型：`TRANSACTION_PROPOSED`、`CONFIRMATION_REQUEST`、`TRANSACTION_CONFIRMED`、`READY_TO_EXECUTE`、`EXECUTION_FAILED`
 
 ### Safe Tx Service
 
