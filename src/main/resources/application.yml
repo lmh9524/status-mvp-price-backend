@@ -161,6 +161,19 @@ app:
     timeoutMs: ${UNISWAP_TIMEOUT_MS:12000}
     rateLimitWindowSeconds: ${UNISWAP_RL_WINDOW_SECONDS:60}
     rateLimitIpLimit: ${UNISWAP_RL_IP_LIMIT:600}
+  tokenCatalog:
+    enabled: ${TOKEN_CATALOG_ENABLED:true}
+    timeoutMs: ${TOKEN_CATALOG_TIMEOUT_MS:12000}
+    alchemyTimeoutMs: ${TOKEN_CATALOG_ALCHEMY_TIMEOUT_MS:6000}
+    refreshTtlSeconds: ${TOKEN_CATALOG_REFRESH_TTL_SECONDS:43200}
+    redisTtlSeconds: ${TOKEN_CATALOG_REDIS_TTL_SECONDS:604800}
+    rateLimitWindowSeconds: ${TOKEN_CATALOG_RL_WINDOW_SECONDS:60}
+    rateLimitIpLimit: ${TOKEN_CATALOG_RL_IP_LIMIT:600}
+    allowedChainIds: ${TOKEN_CATALOG_ALLOWED_CHAIN_IDS:1,10,56,137,196,42161,8453,195,501}
+    openOceanBaseUrl: ${TOKEN_CATALOG_OPENOCEAN_BASE_URL:https://open-api.openocean.finance/v3}
+    trustWalletBaseUrl: ${TOKEN_CATALOG_TRUSTWALLET_BASE_URL:https://cdn.jsdelivr.net/gh/trustwallet/assets@master/blockchains}
+    jupiterTokenListUrl: ${TOKEN_CATALOG_JUPITER_TOKENLIST_URL:https://token.jup.ag/strict}
+    alchemyApiKey: ${ALCHEMY_API_KEY:}
   bsc:
     rpcUrl: ${BSC_RPC_URL:}
   dex:
