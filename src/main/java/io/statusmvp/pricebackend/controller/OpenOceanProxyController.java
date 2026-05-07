@@ -101,7 +101,7 @@ public class OpenOceanProxyController {
 
   @GetMapping("/{chainId}/quote")
   public Mono<ResponseEntity<String>> quote(
-      @PathVariable int chainId,
+      @PathVariable("chainId") int chainId,
       @RequestParam(required = false) MultiValueMap<String, String> query,
       ServerWebExchange exchange) {
     return openOcean.quote(chainId, sanitizeQuoteQuery(chainId, query), resolveClientIp(exchange));
@@ -109,7 +109,7 @@ public class OpenOceanProxyController {
 
   @GetMapping("/{chainId}/swap_quote")
   public Mono<ResponseEntity<String>> swapQuote(
-      @PathVariable int chainId,
+      @PathVariable("chainId") int chainId,
       @RequestParam(required = false) MultiValueMap<String, String> query,
       ServerWebExchange exchange) {
     return openOcean.swapQuote(chainId, sanitizeSwapQuery(chainId, query), resolveClientIp(exchange));
