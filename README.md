@@ -97,8 +97,14 @@ mvn spring-boot:run
 ### Across 桥接目录
 
 - `GET /api/v1/bridge/across/directory`
+- `POST /api/v1/bridge/across/swap/approval`
+- `GET /api/v1/bridge/across/swap/chains`
+- `GET /api/v1/bridge/across/swap/tokens`
+- `GET /api/v1/bridge/across/swap/sources`
+- `GET /api/v1/bridge/across/deposit/status`
 
 用于把 Across 支持链、支持代币和 allowlist 下发给移动端，减少频繁发版。
+Swap API 相关接口由后端统一带上 Across API Key 与 Integrator ID，移动端只接收可签名交易数据。
 
 默认建议配置为：
 
@@ -208,11 +214,14 @@ mvn spring-boot:run
 
 Across 相关常用配置：
 
+- `BRIDGE_ACROSS_API_KEY`
+- `BRIDGE_ACROSS_INTEGRATOR_ID`
 - `BRIDGE_ACROSS_ALLOWLIST_MODE`
 - `BRIDGE_ACROSS_TOKEN_ALLOWLIST_MODE`
 - `BRIDGE_ACROSS_ALLOWED_CHAIN_IDS`
 - `BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS`
 
+`BRIDGE_ACROSS_API_KEY` 和 `BRIDGE_ACROSS_INTEGRATOR_ID` 只配置在后端运行环境，不能写入移动端包。
 其中 `BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS` 只在 `BRIDGE_ACROSS_TOKEN_ALLOWLIST_MODE=STRICT` 时生效。
 
 ### Auth

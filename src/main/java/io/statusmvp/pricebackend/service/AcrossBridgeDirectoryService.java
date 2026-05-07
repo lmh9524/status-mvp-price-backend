@@ -29,6 +29,9 @@ public class AcrossBridgeDirectoryService {
 
   private static final String CACHE_KEY_CHAINS = "bridge:across:chains";
   private static final String CACHE_KEY_ROUTES = "bridge:across:available-routes";
+  private static final String CACHE_KEY_SWAP_CHAINS = "bridge:across:swap:chains";
+  private static final String CACHE_KEY_SWAP_TOKENS = "bridge:across:swap:tokens";
+  private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 
   // P0: Across directory currently returns logoUrl pointing at across-protocol/frontend raw GitHub paths, which are
   // widely 404 (repo is not public). Override chain logos to known-good public sources and drop dead upstream URLs.
@@ -99,6 +102,7 @@ public class AcrossBridgeDirectoryService {
   private final ObjectMapper mapper = new ObjectMapper();
 
   private final String apiBaseUrl;
+  private final String apiKey;
   private final Duration timeout;
   private final long chainsCacheTtlSeconds;
   private final long routesCacheTtlSeconds;
@@ -112,6 +116,7 @@ public class AcrossBridgeDirectoryService {
       WebClient webClient,
       RedisCache cache,
       @Value("${app.bridge.across.apiBaseUrl:https://app.across.to/api}") String apiBaseUrl,
+      @Value("${app.bridge.across.apiKey:}") String apiKey,
       @Value("${app.bridge.across.timeoutMs:12000}") long timeoutMs,
       @Value("${app.bridge.across.chainsCacheTtlSeconds:300}") long chainsCacheTtlSeconds,
       @Value("${app.bridge.across.routesCacheTtlSeconds:60}") long routesCacheTtlSeconds,
@@ -122,6 +127,7 @@ public class AcrossBridgeDirectoryService {
     this.webClient = webClient;
     this.cache = cache;
     this.apiBaseUrl = (apiBaseUrl == null ? "" : apiBaseUrl.trim()).replaceAll("/+$", "");
+    this.apiKey = apiKey == null ? "" : apiKey.trim();
     this.timeout = Duration.ofMillis(Math.max(1000L, timeoutMs));
     this.chainsCacheTtlSeconds = Math.max(5L, chainsCacheTtlSeconds);
     this.routesCacheTtlSeconds = Math.max(5L, routesCacheTtlSeconds);
@@ -134,6 +140,13 @@ public class AcrossBridgeDirectoryService {
 
   public BridgeAcrossDirectoryResponse getDirectory() {
     long now = Instant.now().toEpochMilli();
+    if (!apiKey.isBlank()) {
+      BridgeAcrossDirectoryResponse swapDirectory = getSwapApiDirectory(now);
+      if (!swapDirectory.chains().isEmpty() && !swapDirectory.routes().isEmpty()) {
+        return swapDirectory;
+      }
+    }
+
     if (allowlistMode == AllowlistMode.FULL) {
       List<Chain> chains = fetchAndFilterChains(null, null);
       List<Route> routes = fetchAndFilterRoutes(null, null);
@@ -175,6 +188,155 @@ public class AcrossBridgeDirectoryService {
         now, new BridgeAcrossDirectoryResponse.Allowlist(chainAllow, tokenAllowList), chains, routes);
   }
 
+  private BridgeAcrossDirectoryResponse getSwapApiDirectory(long now) {
+    List<Long> chainAllow =
+        allowlistMode == AllowlistMode.FULL
+            ? null
+            : (allowedChainIds.isEmpty() ? List.of(1L, 10L, 42161L, 8453L, 56L) : allowedChainIds);
+
+    List<String> tokenAllowList =
+        allowedTokenSymbolsList.isEmpty()
+            ? List.of("ETH", "USDC", "USDT", "DAI", "USDC-BNB", "USDT-BNB")
+            : allowedTokenSymbolsList;
+    Set<String> tokenAllowSet =
+        tokenAllowlistMode == TokenAllowlistMode.STRICT
+            ? new HashSet<>(tokenAllowList)
+            : null;
+
+    List<Chain> chainShells = fetchSwapChains(chainAllow);
+    Map<Long, List<Token>> tokensByChain = fetchSwapTokensByChain(chainAllow, tokenAllowSet);
+    Set<String> bridgeableSymbols = bridgeableSymbols(tokensByChain);
+
+    List<Chain> chains = new ArrayList<>();
+    for (Chain c : chainShells) {
+      List<Token> tokens =
+          tokensByChain.getOrDefault(c.chainId(), List.of()).stream()
+              .filter(t -> bridgeableSymbols.contains(upper(t.symbol())))
+              .toList();
+      if (tokens.isEmpty()) continue;
+      chains.add(
+          new Chain(
+              c.chainId(),
+              c.name(),
+              c.publicRpcUrl(),
+              c.explorerUrl(),
+              c.logoUrl(),
+              c.spokePool(),
+              c.spokePoolBlock(),
+              tokens,
+              tokens));
+    }
+
+    List<Route> routes = buildSwapTokenRoutes(chains);
+    List<Long> chainIds = chains.stream().map(Chain::chainId).toList();
+    List<String> tokenSymbols = collectTokenSymbols(chains, routes);
+    return new BridgeAcrossDirectoryResponse(
+        now, new BridgeAcrossDirectoryResponse.Allowlist(chainIds, tokenSymbols), chains, routes);
+  }
+
+  private List<Chain> fetchSwapChains(List<Long> chainAllow) {
+    if (apiBaseUrl.isBlank()) return List.of();
+    String url = apiBaseUrl + "/swap/chains";
+    JsonNode root = fetchJsonArrayCached(CACHE_KEY_SWAP_CHAINS, url, chainsCacheTtlSeconds, true);
+    if (root == null || !root.isArray()) return List.of();
+
+    List<Chain> out = new ArrayList<>();
+    for (JsonNode chain : root) {
+      long chainId = chain.path("chainId").asLong(0L);
+      if (chainId <= 0) continue;
+      if (chainAllow != null && !chainAllow.isEmpty() && !chainAllow.contains(chainId)) continue;
+
+      String logoUrl = sanitizeUpstreamLogoUrl(chain.path("logoUrl").asText(null));
+      out.add(
+          new Chain(
+              chainId,
+              chain.path("name").asText(null),
+              chain.path("publicRpcUrl").asText(null),
+              chain.path("explorerUrl").asText(null),
+              resolveChainLogoUrl(chainId, logoUrl),
+              null,
+              null,
+              List.of(),
+              List.of()));
+    }
+    return out;
+  }
+
+  private Map<Long, List<Token>> fetchSwapTokensByChain(List<Long> chainAllow, Set<String> tokenAllow) {
+    if (apiBaseUrl.isBlank()) return Map.of();
+    String url = apiBaseUrl + "/swap/tokens";
+    JsonNode root = fetchJsonArrayCached(CACHE_KEY_SWAP_TOKENS, url, chainsCacheTtlSeconds, true);
+    if (root == null || !root.isArray()) return Map.of();
+
+    Map<Long, List<Token>> out = new java.util.HashMap<>();
+    for (JsonNode t : root) {
+      long chainId = t.path("chainId").asLong(0L);
+      if (chainId <= 0) continue;
+      if (chainAllow != null && !chainAllow.isEmpty() && !chainAllow.contains(chainId)) continue;
+
+      String symbol = upper(t.path("symbol").asText(""));
+      if (symbol.isBlank()) continue;
+      if (tokenAllow != null && !tokenAllow.isEmpty() && !tokenAllow.contains(symbol)) continue;
+
+      String address = t.path("address").asText(null);
+      int decimals = t.path("decimals").asInt(0);
+      if (address == null || address.isBlank() || decimals <= 0) continue;
+      Token token =
+          new Token(
+              address,
+              symbol,
+              t.path("name").asText(null),
+              decimals,
+              sanitizeUpstreamLogoUrl(t.path("logoUrl").asText(null)));
+      out.computeIfAbsent(chainId, ignored -> new ArrayList<>()).add(token);
+    }
+    return out;
+  }
+
+  private static Set<String> bridgeableSymbols(Map<Long, List<Token>> tokensByChain) {
+    Map<String, Set<Long>> chainsBySymbol = new java.util.HashMap<>();
+    for (Map.Entry<Long, List<Token>> entry : tokensByChain.entrySet()) {
+      for (Token token : entry.getValue()) {
+        String symbol = upper(token.symbol());
+        if (symbol.isBlank()) continue;
+        chainsBySymbol.computeIfAbsent(symbol, ignored -> new HashSet<>()).add(entry.getKey());
+      }
+    }
+    Set<String> out = new HashSet<>();
+    for (Map.Entry<String, Set<Long>> entry : chainsBySymbol.entrySet()) {
+      if (entry.getValue().size() >= 2) out.add(entry.getKey());
+    }
+    return out;
+  }
+
+  private static List<Route> buildSwapTokenRoutes(List<Chain> chains) {
+    List<Route> routes = new ArrayList<>();
+    for (Chain origin : chains) {
+      for (Token input : origin.inputTokens()) {
+        String symbol = upper(input.symbol());
+        if (symbol.isBlank()) continue;
+        for (Chain destination : chains) {
+          if (origin.chainId() == destination.chainId()) continue;
+          Optional<Token> output =
+              destination.outputTokens().stream()
+                  .filter(t -> symbol.equals(upper(t.symbol())))
+                  .findFirst();
+          if (output.isEmpty()) continue;
+          routes.add(
+              new Route(
+                  ZERO_ADDRESS.equalsIgnoreCase(input.address()),
+                  origin.chainId(),
+                  destination.chainId(),
+                  input.address(),
+                  output.get().address(),
+                  symbol,
+                  upper(output.get().symbol())));
+        }
+      }
+    }
+    return routes;
+  }
+
   static List<String> collectTokenSymbols(List<Chain> chains, List<Route> routes) {
     Set<String> tokenSymbolsSet = new HashSet<>();
     for (Route r : routes) {
@@ -196,7 +358,7 @@ public class AcrossBridgeDirectoryService {
     if (apiBaseUrl.isBlank()) return List.of();
     String url = apiBaseUrl + "/chains";
 
-    JsonNode root = fetchJsonArrayCached(CACHE_KEY_CHAINS, url, chainsCacheTtlSeconds);
+    JsonNode root = fetchJsonArrayCached(CACHE_KEY_CHAINS, url, chainsCacheTtlSeconds, false);
     if (root == null || !root.isArray()) return List.of();
 
     List<Chain> out = new ArrayList<>();
@@ -240,7 +402,7 @@ public class AcrossBridgeDirectoryService {
     if (apiBaseUrl.isBlank()) return List.of();
     String url = apiBaseUrl + "/available-routes";
 
-    JsonNode root = fetchJsonArrayCached(CACHE_KEY_ROUTES, url, routesCacheTtlSeconds);
+    JsonNode root = fetchJsonArrayCached(CACHE_KEY_ROUTES, url, routesCacheTtlSeconds, false);
     if (root == null || !root.isArray()) return List.of();
 
     List<Route> out = new ArrayList<>();
@@ -280,7 +442,8 @@ public class AcrossBridgeDirectoryService {
     return out;
   }
 
-  private JsonNode fetchJsonArrayCached(String cacheKey, String url, long ttlSeconds) {
+  private JsonNode fetchJsonArrayCached(
+      String cacheKey, String url, long ttlSeconds, boolean useApiKey) {
     Optional<String> cached = cache.get(cacheKey);
     if (cached.isPresent()) {
       try {
@@ -296,6 +459,12 @@ public class AcrossBridgeDirectoryService {
           webClient
               .get()
               .uri(URI.create(url))
+              .headers(
+                  headers -> {
+                    if (useApiKey && !apiKey.isBlank()) {
+                      headers.setBearerAuth(apiKey);
+                    }
+                  })
               .retrieve()
               .bodyToMono(String.class)
               .timeout(timeout)

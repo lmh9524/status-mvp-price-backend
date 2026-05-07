@@ -138,6 +138,8 @@ app:
   bridge:
     across:
       apiBaseUrl: ${BRIDGE_ACROSS_API_BASE_URL:https://app.across.to/api}
+      apiKey: ${BRIDGE_ACROSS_API_KEY:}
+      integratorId: ${BRIDGE_ACROSS_INTEGRATOR_ID:}
       timeoutMs: ${BRIDGE_ACROSS_TIMEOUT_MS:12000}
       chainsCacheTtlSeconds: ${BRIDGE_ACROSS_CHAINS_CACHE_TTL_SECONDS:300}
       routesCacheTtlSeconds: ${BRIDGE_ACROSS_ROUTES_CACHE_TTL_SECONDS:60}

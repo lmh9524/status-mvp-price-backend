@@ -158,6 +158,7 @@ class AcrossBridgeDirectoryServiceTest {
         webClient,
         cache,
         "https://app.across.to/api",
+        "",
         12000L,
         300L,
         60L,
