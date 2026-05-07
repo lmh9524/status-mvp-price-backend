@@ -163,6 +163,11 @@ app:
     timeoutMs: ${UNISWAP_TIMEOUT_MS:12000}
     rateLimitWindowSeconds: ${UNISWAP_RL_WINDOW_SECONDS:60}
     rateLimitIpLimit: ${UNISWAP_RL_IP_LIMIT:600}
+  openOcean:
+    apiBaseUrl: ${OPENOCEAN_API_BASE_URL:https://open-api.openocean.finance/v3}
+    timeoutMs: ${OPENOCEAN_TIMEOUT_MS:12000}
+    rateLimitWindowSeconds: ${OPENOCEAN_RL_WINDOW_SECONDS:60}
+    rateLimitIpLimit: ${OPENOCEAN_RL_IP_LIMIT:600}
   tokenCatalog:
     enabled: ${TOKEN_CATALOG_ENABLED:true}
     timeoutMs: ${TOKEN_CATALOG_TIMEOUT_MS:12000}
