@@ -135,6 +135,21 @@ class AcrossBridgeDirectoryServiceTest {
     assertEquals(List.of("USDC", "WBTC"), response.chains().get(0).inputTokens().stream().map(BridgeAcrossDirectoryResponse.Token::symbol).toList());
   }
 
+  @Test
+  void fullAllowlistExpandsChainsAndTokens() {
+    AcrossBridgeDirectoryService service =
+        createService("FULL", "ALL_ON_ALLOWED_CHAINS", "1,10", "USDC");
+
+    BridgeAcrossDirectoryResponse response = service.getDirectory();
+
+    assertIterableEquals(List.of(1L, 10L, 137L), response.allowlist().chainIds());
+    assertIterableEquals(List.of("DAI", "MATIC", "USDC", "WBTC"), response.allowlist().tokenSymbols());
+    assertEquals(
+        List.of(1L, 10L, 137L),
+        response.chains().stream().map(BridgeAcrossDirectoryResponse.Chain::chainId).toList());
+    assertEquals(3, response.routes().size());
+  }
+
   private static AcrossBridgeDirectoryService createService(
       String allowlistMode,
       String tokenAllowlistMode,

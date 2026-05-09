@@ -73,9 +73,9 @@ public class AcrossBridgeDirectoryService {
     FULL;
 
     static AllowlistMode parse(String raw) {
-      if (raw == null) return STRICT;
+      if (raw == null) return FULL;
       String v = raw.trim().toUpperCase(Locale.ROOT);
-      if (v.isBlank()) return STRICT;
+      if (v.isBlank()) return FULL;
       if ("FULL".equals(v) || "ALL".equals(v)) return FULL;
       return STRICT;
     }
@@ -120,7 +120,7 @@ public class AcrossBridgeDirectoryService {
       @Value("${app.bridge.across.timeoutMs:12000}") long timeoutMs,
       @Value("${app.bridge.across.chainsCacheTtlSeconds:300}") long chainsCacheTtlSeconds,
       @Value("${app.bridge.across.routesCacheTtlSeconds:60}") long routesCacheTtlSeconds,
-      @Value("${app.bridge.across.allowlistMode:STRICT}") String allowlistMode,
+      @Value("${app.bridge.across.allowlistMode:FULL}") String allowlistMode,
       @Value("${app.bridge.across.tokenAllowlistMode:ALL_ON_ALLOWED_CHAINS}") String tokenAllowlistMode,
       @Value("${app.bridge.across.allowedChainIds:1,10,42161,8453,56}") String allowedChainIds,
       @Value("${app.bridge.across.allowedTokenSymbols:ETH,USDC,USDT,DAI,USDC-BNB,USDT-BNB}") String allowedTokenSymbols) {
