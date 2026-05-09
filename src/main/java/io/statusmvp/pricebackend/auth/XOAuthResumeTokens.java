@@ -23,22 +23,24 @@ public final class XOAuthResumeTokens {
   private static final Base64.Decoder B64URL_DEC = Base64.getUrlDecoder();
   private static final SecureRandom RNG = new SecureRandom();
 
-  private static final int VERSION = 1;
+  private static final int VERSION = 2;
   private static final int IV_BYTES_LEN = 12;
   private static final int TAG_BITS = 128;
   private static final long MAX_FUTURE_IAT_SKEW_SECONDS = 60;
-  private static final String AAD = "x-resume-v1";
+  private static final String AAD = "x-resume-v2";
 
   private XOAuthResumeTokens() {}
 
-  private record Payload(int v, String did, long iat, long exp, String at) {}
+  private record Payload(int v, String did, String dpk, long iat, long exp, String at) {}
 
-  public record Parsed(String deviceId, String accessToken, long issuedAtMs, long expiresAtMs) {}
+  public record Parsed(
+      String deviceId, String deviceProofKeyId, String accessToken, long issuedAtMs, long expiresAtMs) {}
 
   public static String issue(
       ObjectMapper objectMapper,
       String secret,
       String deviceId,
+      String deviceProofKeyId,
       String accessToken,
       long ttlSeconds,
       long nowMs) {
@@ -49,7 +51,7 @@ public final class XOAuthResumeTokens {
 
     long iatSec = Math.max(0, nowMs / 1000);
     long expSec = iatSec + Math.max(1, ttlSeconds);
-    Payload payload = new Payload(VERSION, emptyToNull(deviceId), iatSec, expSec, accessToken);
+    Payload payload = new Payload(VERSION, emptyToNull(deviceId), emptyToNull(deviceProofKeyId), iatSec, expSec, accessToken);
 
     byte[] payloadBytes;
     try {
@@ -114,7 +116,7 @@ public final class XOAuthResumeTokens {
 
     long issuedAtMs = payload.iat * 1000;
     long expiresAtMs = payload.exp * 1000;
-    return new Parsed(payload.did, payload.at, issuedAtMs, expiresAtMs);
+    return new Parsed(payload.did, payload.dpk, payload.at, issuedAtMs, expiresAtMs);
   }
 
   private static SecretKeySpec deriveAesKey(byte[] secretBytes) {
@@ -157,4 +159,3 @@ public final class XOAuthResumeTokens {
     return v.isEmpty() ? null : v;
   }
 }
-

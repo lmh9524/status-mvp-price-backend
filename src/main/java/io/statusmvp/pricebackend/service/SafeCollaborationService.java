@@ -117,6 +117,44 @@ public class SafeCollaborationService {
         .map(SafeCollaborationDtos.InboxResponse::items);
   }
 
+  public Mono<List<SafeNotificationCandidate>> queryNotificationCandidatesForSafes(
+      List<SafeCollaborationDtos.DiscoveryItem> items, int limit, String clientIp, String deviceId) {
+    List<SafeCollaborationDtos.DiscoveryItem> normalizedItems = normalizeDiscoveryItems(items);
+    if (normalizedItems.isEmpty()) {
+      return Mono.just(List.of());
+    }
+
+    int perSafeQueueLimit = Math.min(SAFE_QUEUE_MAX_ITEMS, Math.max(SAFE_QUEUE_PAGE_LIMIT, sanitizeLimit(limit)));
+
+    return Flux.fromIterable(normalizedItems)
+        .flatMap(
+            discoveryItem ->
+                fetchNotificationCandidatesForSafe(discoveryItem, perSafeQueueLimit, clientIp, deviceId)
+                    .onErrorResume(
+                        error -> {
+                          String safeId = safeKey(discoveryItem.chainId(), discoveryItem.safeAddress());
+                          log.warn(
+                              "safe.notifications.candidates.safe_failure safeId={} error={}",
+                              safeId,
+                              error.getMessage());
+                          return Mono.just(List.of());
+                        }),
+            SAFE_CONCURRENCY)
+        .flatMapIterable(candidates -> candidates)
+        .collectList()
+        .map(
+            candidates -> {
+              candidates.sort(
+                  Comparator.comparing(
+                          (SafeNotificationCandidate item) ->
+                              sortTimestamp(item.lastActivityAt(), item.submissionDate()))
+                      .reversed()
+                      .thenComparing(item -> item.safeTxHash().toLowerCase(Locale.ROOT)));
+              int capped = Math.min(candidates.size(), sanitizeLimit(limit));
+              return List.copyOf(candidates.subList(0, capped));
+            });
+  }
+
   private Mono<DiscoverySnapshot> fetchDiscoverySnapshot(
       List<String> ownerAddresses, String clientIp, String deviceId) {
     return Flux.fromIterable(ownerAddresses)
@@ -367,6 +405,83 @@ public class SafeCollaborationService {
         .onErrorResume(error -> Mono.just(new SafeInboxBatch(List.of(), Set.of(safeId))));
   }
 
+  private Mono<List<SafeNotificationCandidate>> fetchNotificationCandidatesForSafe(
+      SafeCollaborationDtos.DiscoveryItem discoveryItem,
+      int queueLimit,
+      String clientIp,
+      String deviceId) {
+    SafeChain chain = chainById(discoveryItem.chainId());
+    if (chain == null) {
+      return Mono.just(List.of());
+    }
+
+    String safeId = safeKey(discoveryItem.chainId(), discoveryItem.safeAddress());
+
+    Mono<List<QueueItem>> pendingQueue =
+        fetchMultisigQueue(chain, discoveryItem.safeAddress(), false, queueLimit, clientIp, deviceId)
+            .onErrorResume(
+                error -> {
+                  log.warn(
+                      "safe.notifications.candidates.pending_queue_failure safeId={} error={}",
+                      safeId,
+                      error.getMessage());
+                  return Mono.just(List.of());
+                });
+    Mono<List<QueueItem>> executedQueue =
+        fetchMultisigQueue(
+                chain,
+                discoveryItem.safeAddress(),
+                true,
+                Math.min(queueLimit, SAFE_QUEUE_PAGE_LIMIT),
+                clientIp,
+                deviceId)
+            .onErrorResume(
+                error -> {
+                  log.warn(
+                      "safe.notifications.candidates.executed_queue_failure safeId={} error={}",
+                      safeId,
+                      error.getMessage());
+                  return Mono.just(List.of());
+                });
+
+    return Mono.zip(pendingQueue, executedQueue)
+        .flatMap(
+            queues -> {
+              LinkedHashMap<String, QueueItem> byHash = new LinkedHashMap<>();
+              for (QueueItem item : queues.getT1()) {
+                byHash.putIfAbsent(item.safeTxHash().toLowerCase(Locale.ROOT), item);
+              }
+              for (QueueItem item : queues.getT2()) {
+                byHash.putIfAbsent(item.safeTxHash().toLowerCase(Locale.ROOT), item);
+              }
+              if (byHash.isEmpty()) {
+                return Mono.just(List.of());
+              }
+
+              return Flux.fromIterable(byHash.values())
+                  .flatMap(
+                      queueItem ->
+                          fetchTransactionDetail(chain, queueItem.safeTxHash(), clientIp, deviceId)
+                              .map(detail -> buildNotificationCandidate(discoveryItem, detail))
+                              .onErrorResume(
+                                  error -> {
+                                    log.warn(
+                                        "safe.notifications.candidates.detail_failure safeId={} safeTxHash={} error={}",
+                                        safeId,
+                                        queueItem.safeTxHash(),
+                                        error.getMessage());
+                                    return Mono.just(Optional.<SafeNotificationCandidate>empty());
+                                  }),
+                      TX_DETAIL_CONCURRENCY)
+                  .collectList()
+                  .map(
+                      optionalCandidates ->
+                          optionalCandidates.stream()
+                              .flatMap(Optional::stream)
+                              .toList());
+            });
+  }
+
   private Mono<List<QueueItem>> fetchPendingQueue(
       SafeChain chain,
       String safeAddress,
@@ -376,6 +491,25 @@ public class SafeCollaborationService {
     return fetchPendingQueuePage(
         chain,
         safeAddress,
+        0,
+        Math.min(Math.max(queueLimit, SAFE_QUEUE_PAGE_LIMIT), SAFE_QUEUE_MAX_ITEMS),
+        SAFE_QUEUE_MAX_PAGES,
+        new LinkedHashMap<>(),
+        clientIp,
+        deviceId);
+  }
+
+  private Mono<List<QueueItem>> fetchMultisigQueue(
+      SafeChain chain,
+      String safeAddress,
+      boolean executed,
+      int queueLimit,
+      String clientIp,
+      String deviceId) {
+    return fetchMultisigQueuePage(
+        chain,
+        safeAddress,
+        executed,
         0,
         Math.min(Math.max(queueLimit, SAFE_QUEUE_PAGE_LIMIT), SAFE_QUEUE_MAX_ITEMS),
         SAFE_QUEUE_MAX_PAGES,
@@ -440,6 +574,74 @@ public class SafeCollaborationService {
               return fetchPendingQueuePage(
                   chain,
                   safeAddress,
+                  page.nextOffset().get(),
+                  queueLimit,
+                  remainingPages - 1,
+                  accumulator,
+                  clientIp,
+                  deviceId);
+            });
+  }
+
+  private Mono<List<QueueItem>> fetchMultisigQueuePage(
+      SafeChain chain,
+      String safeAddress,
+      boolean executed,
+      int offset,
+      int queueLimit,
+      int remainingPages,
+      LinkedHashMap<String, QueueItem> accumulator,
+      String clientIp,
+      String deviceId) {
+    MultiValueMap<String, String> query = new LinkedMultiValueMap<>();
+    query.add("executed", executed ? "true" : "false");
+    query.add("ordering", "-modified");
+    query.add("limit", String.valueOf(SAFE_QUEUE_PAGE_LIMIT));
+    query.add("offset", String.valueOf(Math.max(0, offset)));
+
+    return gateway
+        .get(
+            chain.code(),
+            "/api/v2/safes/" + safeAddress + "/multisig-transactions/",
+            query,
+            clientIp,
+            deviceId,
+            QUEUE_CACHE)
+        .flatMap(
+            response -> {
+              int status = response.getStatusCode().value();
+              if (status == 404) {
+                return Mono.just(List.of());
+              }
+              if (status < 200 || status >= 300) {
+                return Mono.error(
+                    new IllegalStateException(
+                        "safe queue upstream returned " + status + " for " + safeAddress));
+              }
+
+              QueuePage page = parsePendingQueue(response);
+              for (QueueItem item : page.items()) {
+                if (accumulator.size() >= queueLimit) {
+                  break;
+                }
+                accumulator.putIfAbsent(item.safeTxHash().toLowerCase(Locale.ROOT), item);
+              }
+
+              if (accumulator.size() >= queueLimit || page.nextOffset().isEmpty() || remainingPages <= 1) {
+                if (remainingPages <= 1 && page.nextOffset().isPresent()) {
+                  log.warn(
+                      "safe.notifications.queue.max_pages chainId={} safe={} executed={}",
+                      chain.chainId(),
+                      safeAddress,
+                      executed);
+                }
+                return Mono.just(List.copyOf(accumulator.values()));
+              }
+
+              return fetchMultisigQueuePage(
+                  chain,
+                  safeAddress,
+                  executed,
                   page.nextOffset().get(),
                   queueLimit,
                   remainingPages - 1,
@@ -521,6 +723,33 @@ public class SafeCollaborationService {
         actionOwners);
   }
 
+  private Optional<SafeNotificationCandidate> buildNotificationCandidate(
+      SafeCollaborationDtos.DiscoveryItem discoveryItem, TransactionDetail detail) {
+    if (detail.safeTxHash().isBlank() || detail.confirmationsRequired() <= 0) {
+      return Optional.empty();
+    }
+
+    boolean executed = Boolean.TRUE.equals(detail.isExecuted());
+    boolean executionFailed = executed && Boolean.FALSE.equals(detail.isSuccessful());
+    if (executed && !executionFailed) {
+      return Optional.empty();
+    }
+
+    return Optional.of(
+        new SafeNotificationCandidate(
+            discoveryItem.chainId(),
+            discoveryItem.safeAddress(),
+            detail.safeTxHash(),
+            detail.nonce(),
+            detail.confirmations().size(),
+            detail.confirmationsRequired(),
+            detail.confirmations(),
+            detail.transactionHash(),
+            executionFailed,
+            detail.submissionDate(),
+            detail.lastActivityAt()));
+  }
+
   private SafesByOwnerPage parseSafesByOwnerPage(ResponseEntity<String> response) {
     JsonNode root = readTree(response.getBody());
     List<String> safeAddresses = new ArrayList<>();
@@ -567,6 +796,9 @@ public class SafeCollaborationService {
         intOrNull(root.get("nonce")),
         intOrZero(root.get("confirmationsRequired")),
         confirmations,
+        booleanOrNull(root.get("isExecuted")),
+        booleanOrNull(root.get("isSuccessful")),
+        textOrNull(root.get("transactionHash")),
         textOrNull(root.get("submissionDate")),
         firstNonBlank(textOrNull(root.get("modified")), textOrNull(root.get("submissionDate"))));
   }
@@ -612,6 +844,26 @@ public class SafeCollaborationService {
   private static int intOrZero(JsonNode node) {
     Integer value = intOrNull(node);
     return value == null ? 0 : value;
+  }
+
+  private static Boolean booleanOrNull(JsonNode node) {
+    if (node == null || node.isNull()) {
+      return null;
+    }
+    if (node.isBoolean()) {
+      return node.asBoolean();
+    }
+    String text = textOrNull(node);
+    if (text == null) {
+      return null;
+    }
+    if ("true".equalsIgnoreCase(text)) {
+      return true;
+    }
+    if ("false".equalsIgnoreCase(text)) {
+      return false;
+    }
+    return null;
   }
 
   private static int sanitizeLimit(Integer requestedLimit) {
@@ -769,6 +1021,22 @@ public class SafeCollaborationService {
       Integer nonce,
       int confirmationsRequired,
       List<String> confirmations,
+      Boolean isExecuted,
+      Boolean isSuccessful,
+      String transactionHash,
+      String submissionDate,
+      String lastActivityAt) {}
+
+  public record SafeNotificationCandidate(
+      int chainId,
+      String safeAddress,
+      String safeTxHash,
+      Integer nonce,
+      int confirmationsSubmitted,
+      int confirmationsRequired,
+      List<String> confirmedOwnerAddresses,
+      String transactionHash,
+      boolean executionFailed,
       String submissionDate,
       String lastActivityAt) {}
 

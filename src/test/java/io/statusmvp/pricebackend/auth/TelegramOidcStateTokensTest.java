@@ -35,7 +35,12 @@ class TelegramOidcStateTokensTest {
     long nowMs = 1_700_000_000_000L;
     TelegramOidcStateTokens.Issued issued =
         TelegramOidcStateTokens.issue(MAPPER, SECRET, "veilwallet://openlogin", 600, nowMs);
-    String tampered = issued.state().substring(0, issued.state().length() - 1) + "A";
+    String[] parts = issued.state().split("\\.", 2);
+    String originalSignature = parts[1];
+    char first = originalSignature.charAt(0);
+    char replacement = first == 'A' ? 'B' : 'A';
+    String tamperedSignature = replacement + originalSignature.substring(1);
+    String tampered = parts[0] + "." + tamperedSignature;
     assertNull(TelegramOidcStateTokens.parseAndVerify(MAPPER, SECRET, tampered, nowMs));
   }
 

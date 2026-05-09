@@ -29,6 +29,31 @@ public final class AuthDtos {
 
   public record AppleLoginRequest(@NotBlank String identityToken, @NotBlank String nonce) {}
 
+  public record AppAttestChallengeRequest(String keyId) {}
+
+  public record AppAttestChallengeResponse(
+      boolean attestationRequired,
+      String challengeId,
+      String challenge,
+      long expiresInSeconds) {}
+
+  public record AppAttestRegisterRequest(
+      @NotBlank String challengeId,
+      @NotBlank String keyId,
+      @NotBlank String attestationObjectBase64Url,
+      String capability) {}
+
+  public record AppAttestRegisterResponse(boolean registered, String keyId) {}
+
+  public record AppAttestAssertionChallengeRequest(
+      @NotBlank String keyId, @NotBlank String method, @NotBlank String path) {}
+
+  public record AppAttestAssertionChallengeResponse(String challengeId, String challenge, long expiresInSeconds) {}
+
+  public record DeviceProofChallengeRequest(@NotBlank String method, @NotBlank String path) {}
+
+  public record DeviceProofChallengeResponse(String challengeId, String challenge, long expiresInSeconds) {}
+
   public record ExchangeRequest(@NotBlank String code, String nonce) {}
 
   public record ExchangeResponse(
@@ -49,6 +74,10 @@ public final class AuthDtos {
       String refreshToken,
       long accessTokenExpiresInSeconds,
       long refreshTokenExpiresInSeconds) {}
+
+  public record LogoutRequest(@NotBlank String refreshToken) {}
+
+  public record LogoutResponse(boolean refreshTokenRevoked) {}
 
   public record MeResponse(String walletSub, List<ProviderBinding> providers) {}
 
@@ -79,12 +108,6 @@ public final class AuthDtos {
       @NotBlank String state,
       @JsonAlias("id_token")
       @NotBlank String idToken) {}
-
-  public record Web3authJwtResponse(
-      String provider,
-      String providerUserId,
-      String providerSub,
-      String web3authJwt) {}
 
   public record SiweNonceRequest(@NotBlank String address) {}
 

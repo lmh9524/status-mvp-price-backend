@@ -2,7 +2,12 @@ package io.statusmvp.pricebackend.auth;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import io.statusmvp.pricebackend.auth.model.AppAttestAssertionChallengeRecord;
+import io.statusmvp.pricebackend.auth.model.AppAttestChallengeRecord;
+import io.statusmvp.pricebackend.auth.model.AppAttestRegistrationRecord;
 import io.statusmvp.pricebackend.auth.model.AuthCodeRecord;
+import io.statusmvp.pricebackend.auth.model.DeviceProofChallengeRecord;
+import io.statusmvp.pricebackend.auth.model.DeviceProofRegistrationRecord;
 import io.statusmvp.pricebackend.auth.model.OAuthStateRecord;
 import io.statusmvp.pricebackend.auth.model.RefreshTokenRecord;
 import io.statusmvp.pricebackend.auth.model.SiweNonceRecord;
@@ -21,8 +26,14 @@ import org.springframework.util.StringUtils;
 public class AuthRedisStore {
   private static final String PREFIX_OAUTH_STATE = "auth:oauth:state:";
   private static final String PREFIX_OAUTH_STATE_DEVICE = "auth:oauth:state_device:";
+  private static final String PREFIX_OAUTH_STATE_PROOF = "auth:oauth:state_proof:";
   private static final String PREFIX_AUTH_CODE = "auth:code:";
   private static final String PREFIX_AUTH_CODE_USED = "auth:code:used:";
+  private static final String PREFIX_APP_ATTEST_CHALLENGE = "auth:app_attest:challenge:";
+  private static final String PREFIX_APP_ATTEST_ASSERTION_CHALLENGE = "auth:app_attest:assertion:";
+  private static final String PREFIX_APP_ATTEST_REGISTRATION = "auth:app_attest:device:";
+  private static final String PREFIX_DEVICE_PROOF_CHALLENGE = "auth:device_proof:challenge:";
+  private static final String PREFIX_DEVICE_PROOF_REGISTRATION = "auth:device_proof:device:";
   private static final String PREFIX_PROVIDER_TO_WALLET = "auth:provider:";
   private static final String PREFIX_WALLET = "auth:wallet:";
   private static final String PREFIX_WALLET_REFRESH = "auth:wallet_refresh:";
@@ -74,6 +85,25 @@ public class AuthRedisStore {
   public Optional<String> consumeOAuthStateDevice(String state) {
     if (state == null || state.isBlank()) return Optional.empty();
     String key = PREFIX_OAUTH_STATE_DEVICE + state;
+    String out = getAndDeleteRaw(key);
+    if (out == null || out.isBlank()) return Optional.empty();
+    return Optional.of(out.trim());
+  }
+
+  public void putOAuthStateProof(String state, String deviceProofKeyId, long ttlSeconds) {
+    if (state == null || state.isBlank()) return;
+    if (deviceProofKeyId == null || deviceProofKeyId.isBlank()) return;
+    redis
+        .opsForValue()
+        .set(
+            PREFIX_OAUTH_STATE_PROOF + state,
+            deviceProofKeyId.trim(),
+            Duration.ofSeconds(Math.max(1, ttlSeconds)));
+  }
+
+  public Optional<String> consumeOAuthStateProof(String state) {
+    if (state == null || state.isBlank()) return Optional.empty();
+    String key = PREFIX_OAUTH_STATE_PROOF + state;
     String out = getAndDeleteRaw(key);
     if (out == null || out.isBlank()) return Optional.empty();
     return Optional.of(out.trim());
@@ -222,6 +252,64 @@ public class AuthRedisStore {
     if (jti == null || jti.isBlank()) return false;
     Boolean ok = redis.opsForValue().setIfAbsent(PREFIX_JTI + jti, "1", Duration.ofSeconds(Math.max(1, ttlSeconds)));
     return Boolean.TRUE.equals(ok);
+  }
+
+  public void revokeJti(String jti, long ttlSeconds) {
+    if (jti == null || jti.isBlank()) return;
+    redis.opsForValue().set(PREFIX_JTI + jti.trim(), "1", Duration.ofSeconds(Math.max(1, ttlSeconds)));
+  }
+
+  public boolean isJtiRevoked(String jti) {
+    if (jti == null || jti.isBlank()) return false;
+    return Boolean.TRUE.equals(redis.hasKey(PREFIX_JTI + jti.trim()));
+  }
+
+  public void putAppAttestChallenge(AppAttestChallengeRecord record, long ttlSeconds) {
+    putJson(PREFIX_APP_ATTEST_CHALLENGE + record.challengeId(), record, ttlSeconds);
+  }
+
+  public Optional<AppAttestChallengeRecord> consumeAppAttestChallenge(String challengeId) {
+    if (challengeId == null || challengeId.isBlank()) return Optional.empty();
+    return getAndDeleteJson(PREFIX_APP_ATTEST_CHALLENGE + challengeId.trim(), AppAttestChallengeRecord.class);
+  }
+
+  public void putAppAttestAssertionChallenge(AppAttestAssertionChallengeRecord record, long ttlSeconds) {
+    putJson(PREFIX_APP_ATTEST_ASSERTION_CHALLENGE + record.challengeId(), record, ttlSeconds);
+  }
+
+  public Optional<AppAttestAssertionChallengeRecord> consumeAppAttestAssertionChallenge(String challengeId) {
+    if (challengeId == null || challengeId.isBlank()) return Optional.empty();
+    return getAndDeleteJson(
+        PREFIX_APP_ATTEST_ASSERTION_CHALLENGE + challengeId.trim(), AppAttestAssertionChallengeRecord.class);
+  }
+
+  public Optional<AppAttestRegistrationRecord> getAppAttestRegistration(String deviceId) {
+    if (deviceId == null || deviceId.isBlank()) return Optional.empty();
+    return getJson(PREFIX_APP_ATTEST_REGISTRATION + deviceId.trim(), AppAttestRegistrationRecord.class);
+  }
+
+  public void putAppAttestRegistration(AppAttestRegistrationRecord record) {
+    if (record == null || !StringUtils.hasText(record.deviceId())) return;
+    putJson(PREFIX_APP_ATTEST_REGISTRATION + record.deviceId().trim(), record, 0);
+  }
+
+  public void putDeviceProofChallenge(DeviceProofChallengeRecord record, long ttlSeconds) {
+    putJson(PREFIX_DEVICE_PROOF_CHALLENGE + record.challengeId(), record, ttlSeconds);
+  }
+
+  public Optional<DeviceProofChallengeRecord> consumeDeviceProofChallenge(String challengeId) {
+    if (challengeId == null || challengeId.isBlank()) return Optional.empty();
+    return getAndDeleteJson(PREFIX_DEVICE_PROOF_CHALLENGE + challengeId.trim(), DeviceProofChallengeRecord.class);
+  }
+
+  public Optional<DeviceProofRegistrationRecord> getDeviceProofRegistration(String deviceId) {
+    if (deviceId == null || deviceId.isBlank()) return Optional.empty();
+    return getJson(PREFIX_DEVICE_PROOF_REGISTRATION + deviceId.trim(), DeviceProofRegistrationRecord.class);
+  }
+
+  public void putDeviceProofRegistration(DeviceProofRegistrationRecord record) {
+    if (record == null || !StringUtils.hasText(record.deviceId())) return;
+    putJson(PREFIX_DEVICE_PROOF_REGISTRATION + record.deviceId().trim(), record, 0);
   }
 
   private <T> Optional<T> getJson(String key, Class<T> type) {

@@ -97,8 +97,22 @@ mvn spring-boot:run
 ### Across 桥接目录
 
 - `GET /api/v1/bridge/across/directory`
+- `POST /api/v1/bridge/across/swap/approval`
+- `GET /api/v1/bridge/across/swap/chains`
+- `GET /api/v1/bridge/across/swap/tokens`
+- `GET /api/v1/bridge/across/swap/sources`
+- `GET /api/v1/bridge/across/deposit/status`
 
 用于把 Across 支持链、支持代币和 allowlist 下发给移动端，减少频繁发版。
+Swap API 相关接口由后端统一带上 Across API Key 与 Integrator ID，移动端只接收可签名交易数据。
+
+默认建议配置为：
+
+- 固定 `BRIDGE_ACROSS_ALLOWED_CHAIN_IDS`
+- `BRIDGE_ACROSS_ALLOWLIST_MODE=STRICT`
+- `BRIDGE_ACROSS_TOKEN_ALLOWLIST_MODE=ALL_ON_ALLOWED_CHAINS`
+
+这样可以保持链范围稳定，同时让固定链上的 Across 可桥接币种随目录自动扩容。
 
 ### Solana Jupiter 代理
 
@@ -118,7 +132,6 @@ mvn spring-boot:run
 - Provider 绑定：`/api/v1/auth/providers/bind`、`/api/v1/auth/providers/unbind`
 - DApp 同步：`/api/v1/auth/sync/dapps`
 - SIWE：`/api/v1/auth/siwe/nonce`、`/api/v1/auth/siwe/verify`
-- Web3Auth JWT：`/api/v1/auth/web3auth/jwt`
 - JWKS：`/.well-known/jwks.json`
 
 ### Safe 协作与通知
@@ -129,6 +142,7 @@ mvn spring-boot:run
 - 通知拉取：`POST /api/v1/safe/notifications/v1/pull`
 - 清理订阅：`POST /api/v1/safe/notifications/v1/subscriptions/delete-all`
 - 删除设备：`DELETE /api/v1/safe/notifications/v1/devices/{deviceUuid}`
+- 通知类型：`TRANSACTION_PROPOSED`、`CONFIRMATION_REQUEST`、`TRANSACTION_CONFIRMED`、`READY_TO_EXECUTE`、`EXECUTION_FAILED`
 
 ### Safe Tx Service
 
@@ -198,6 +212,18 @@ mvn spring-boot:run
 - 缓存 TTL
 - 速率限制
 
+Across 相关常用配置：
+
+- `BRIDGE_ACROSS_API_KEY`
+- `BRIDGE_ACROSS_INTEGRATOR_ID`
+- `BRIDGE_ACROSS_ALLOWLIST_MODE`
+- `BRIDGE_ACROSS_TOKEN_ALLOWLIST_MODE`
+- `BRIDGE_ACROSS_ALLOWED_CHAIN_IDS`
+- `BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS`
+
+`BRIDGE_ACROSS_API_KEY` 和 `BRIDGE_ACROSS_INTEGRATOR_ID` 只配置在后端运行环境，不能写入移动端包。
+其中 `BRIDGE_ACROSS_ALLOWED_TOKEN_SYMBOLS` 只在 `BRIDGE_ACROSS_TOKEN_ALLOWLIST_MODE=STRICT` 时生效。
+
 ### Auth
 
 - `AUTH_ENABLED`
@@ -254,6 +280,8 @@ env.example
 - `env.example`
 - `deploy/docker/restore-prod-env-from-backup.sh`
 - `deploy/docker/compare-env-with-live.sh`
+- `deploy/docker/compare-env-structure.sh`
+- `deploy/docker/render-env-candidate.sh`
 - `deploy/docker/package-release-source.sh`
 - `deploy/docker/prod-smoke.sh`
 - `deploy/docker/prod-release.sh`
@@ -269,14 +297,18 @@ env.example
 推荐正式发布流程：
 
 1. 生产 ENV 文件单独放在仓库外，例如 `/data/deploy/status-mvp-price-backend/prod.env`
-2. 把 `deploy/docker/*.sh` 同步到服务器独立部署目录，例如 `/data/deploy/status-mvp-price-backend/bin`
-3. 如果历史配置原来在 systemd 的 `/etc/status-mvp-price-backend/status-mvp-price-backend.env`，先用 `/data/deploy/status-mvp-price-backend/bin/restore-prod-env-from-backup.sh <backup.tar.gz> /data/deploy/status-mvp-price-backend/prod.env` 恢复到 Docker 专用路径
-4. 发布前先执行 `/data/deploy/status-mvp-price-backend/bin/compare-env-with-live.sh /data/deploy/status-mvp-price-backend/prod.env`，确认外部 env 与当前线上容器零差异
-5. 在本地干净仓库执行 `./deploy/docker/package-release-source.sh` 生成源码快照，或直接使用 CI 产物
-6. 把源码快照上传到服务器临时目录并解压，例如 `/tmp/status-mvp-price-backend-<git-sha>`
-7. 在服务器上执行 `BUILD_CONTEXT=/tmp/status-mvp-price-backend-<git-sha> PROD_ENV_FILE=/data/deploy/status-mvp-price-backend/prod.env /data/deploy/status-mvp-price-backend/bin/prod-release.sh`
-8. 脚本会自动完成 Redis 保护性快照、候选容器启动、关键 smoke check、正式切换与回滚点保留
-9. 如果 smoke check 或正式容器健康检查失败，脚本会自动回滚到切换前的旧容器
+2. 测试 ENV 也必须单独放在仓库外，例如 `/data/deploy/status-mvp-price-backend/dev.env` 或其它受控路径，不要直接复用临时导出的容器环境
+3. 把 `deploy/docker/*.sh` 同步到服务器独立部署目录，例如 `/data/deploy/status-mvp-price-backend/bin`
+4. 如果历史配置原来在 systemd 的 `/etc/status-mvp-price-backend/status-mvp-price-backend.env`，先用 `/data/deploy/status-mvp-price-backend/bin/restore-prod-env-from-backup.sh <backup.tar.gz> /data/deploy/status-mvp-price-backend/prod.env` 恢复到 Docker 专用路径
+5. 每次代码引入新配置项后，先在受控运维终端执行 `./deploy/docker/compare-env-structure.sh --ignore-status env.example /path/to/target.env env.example target.env`，确认目标 env 没有缺键、脏键或重复键
+6. 如果测试 env 需要跟随正式 env 补结构，先执行 `./deploy/docker/render-env-candidate.sh /secure/prod.env /secure/dev.env env.example /tmp/dev.candidate.env prod dev` 生成候选文件，再由运维补齐 `manual_fill_required` 项；如果测试流量前面还有 Caddy / Nginx / ELB 之类代理，生成时可额外传入 `CANDIDATE_PROXY_IPS_HINT=代理到容器的真实源 IP`
+7. 任何准备把测试结果放行到正式前，必须再执行 `./deploy/docker/compare-env-structure.sh /secure/prod.env /secure/dev.env prod dev`，确认测试服与正式服没有缺失键，也没有一边 SET 一边 EMPTY 的结构漂移；允许的差异只应来自域名、回调地址、Redis 和各环境独立凭据
+8. 发布前先执行 `/data/deploy/status-mvp-price-backend/bin/compare-env-with-live.sh /data/deploy/status-mvp-price-backend/prod.env`，确认外部 env 与当前线上容器零差异
+9. 在本地干净仓库执行 `./deploy/docker/package-release-source.sh` 生成源码快照，或直接使用 CI 产物
+10. 把源码快照上传到服务器临时目录并解压，例如 `/tmp/status-mvp-price-backend-<git-sha>`
+11. 在服务器上执行 `BUILD_CONTEXT=/tmp/status-mvp-price-backend-<git-sha> PROD_ENV_FILE=/data/deploy/status-mvp-price-backend/prod.env /data/deploy/status-mvp-price-backend/bin/prod-release.sh`
+12. 脚本会自动完成 Redis 保护性快照、候选容器启动、关键 smoke check、正式切换与回滚点保留
+13. 如果 smoke check 或正式容器健康检查失败，脚本会自动回滚到切换前的旧容器
 
 不要把生产机上的业务仓库工作树当成正式发布源。生产发布应始终来自本地干净仓库或 CI 构建产物，避免服务器上的脏工作树、分叉提交或临时调试文件污染正式发布。
 

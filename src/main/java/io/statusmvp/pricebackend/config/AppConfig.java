@@ -26,11 +26,11 @@ public class AppConfig {
 
   @Bean
   public WebClient webClient() {
-    // Bump in-memory buffer slightly for safety (still bounded).
+    // Token catalogs can be a few MB, especially the Solana/Jupiter list.
     ExchangeStrategies strategies =
         ExchangeStrategies.builder()
             .codecs(
-                c -> c.defaultCodecs().maxInMemorySize(2 * 1024 * 1024))
+                c -> c.defaultCodecs().maxInMemorySize(8 * 1024 * 1024))
             .build();
 
     return WebClient.builder()

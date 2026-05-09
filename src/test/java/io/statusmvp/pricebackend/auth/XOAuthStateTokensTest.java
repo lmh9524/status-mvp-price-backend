@@ -35,7 +35,12 @@ class XOAuthStateTokensTest {
     long nowMs = 1_700_000_000_000L;
     XOAuthStateTokens.Issued issued =
         XOAuthStateTokens.issue(MAPPER, SECRET, "veilwallet://openlogin", 600, nowMs);
-    String tampered = issued.state().substring(0, issued.state().length() - 1) + "A";
+    String[] parts = issued.state().split("\\.", 2);
+    String originalSignature = parts[1];
+    char first = originalSignature.charAt(0);
+    char replacement = first == 'A' ? 'B' : 'A';
+    String tamperedSignature = replacement + originalSignature.substring(1);
+    String tampered = parts[0] + "." + tamperedSignature;
     assertNull(XOAuthStateTokens.parseAndVerify(MAPPER, SECRET, tampered, nowMs));
   }
 
@@ -47,4 +52,3 @@ class XOAuthStateTokensTest {
     assertNull(XOAuthStateTokens.parseAndVerify(MAPPER, SECRET, issued.state(), nowMs + 5_000));
   }
 }
-

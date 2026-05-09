@@ -62,6 +62,8 @@ class AuthServiceDeleteAccountTest {
     String walletSub = "wallet_123";
     String refreshToken = "refresh-token";
     String refreshHash = "refresh-hash";
+    String deviceId = "device-1";
+    String deviceProofKeyId = "proof-key-1";
     String providerSubX = "x:abc";
     String providerSubApple = "apple:def";
 
@@ -70,7 +72,18 @@ class AuthServiceDeleteAccountTest {
     when(store.getWalletDeletedAt(walletSub)).thenReturn(Optional.empty());
     when(jwtService.sha256Hex(refreshToken)).thenReturn(refreshHash);
     when(store.getRefreshTokenByHash(refreshHash))
-        .thenReturn(Optional.of(new RefreshTokenRecord("id-1", walletSub, refreshHash, 1L, 2L, null, null)));
+        .thenReturn(
+            Optional.of(
+                new RefreshTokenRecord(
+                    "id-1",
+                    walletSub,
+                    refreshHash,
+                    deviceId,
+                    deviceProofKeyId,
+                    1L,
+                    System.currentTimeMillis() + 60_000L,
+                    null,
+                    null)));
     when(store.revokeAllRefreshTokensForWallet(walletSub)).thenReturn(2);
 
     Map<String, ProviderBinding> providers = new LinkedHashMap<>();
@@ -87,7 +100,11 @@ class AuthServiceDeleteAccountTest {
                     WalletProfile.create(walletSub, 1L).history())));
 
     AuthDtos.DeleteAccountResponse response =
-        service.deleteAccount("Bearer access-token", new AuthDtos.DeleteAccountRequest(refreshToken));
+        service.deleteAccount(
+            "Bearer access-token",
+            new AuthDtos.DeleteAccountRequest(refreshToken),
+            deviceId,
+            deviceProofKeyId);
 
     assertEquals(walletSub, response.walletSub());
     assertEquals(2, response.removedProviders());

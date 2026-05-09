@@ -6,6 +6,7 @@ public record AuthCodeRecord(
     String providerUserId,
     String providerSub,
     String deviceId,
+    String deviceProofKeyId,
     long createdAt,
     long expiresAt,
     Long usedAt) {}
