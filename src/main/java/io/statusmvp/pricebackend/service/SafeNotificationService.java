@@ -57,6 +57,9 @@ public class SafeNotificationService {
   private static final String DEVICES_KEY = "safe:notif:devices";
   private static final String TRANSPORT_PULL_LOCAL = "pull_local_notification";
   private static final String TRANSPORT_REMOTE_PUSH = "remote_push";
+  private static final String PROVIDER_FCM = "fcm";
+  private static final String PROVIDER_APNS = "apns";
+  private static final String PROVIDER_NONE = "none";
   private static final String FCM_SCOPE = "https://www.googleapis.com/auth/firebase.messaging";
   private static final List<String> DEFAULT_NOTIFICATION_TYPES =
       List.of("CONFIRMATION_REQUEST", "READY_TO_EXECUTE");
@@ -155,10 +158,17 @@ public class SafeNotificationService {
               String deviceUuid = resolveDeviceUuid(request == null ? null : request.deviceUuid(), fallbackDeviceUuid);
               String deviceType = normalizeDeviceType(request == null ? null : request.deviceType());
               String cloudMessagingToken = normalizeToken(request == null ? null : request.cloudMessagingToken());
+              String cloudMessagingProvider =
+                  normalizeCloudMessagingProvider(
+                      request == null ? null : request.cloudMessagingProvider(), deviceType, cloudMessagingToken);
+              if (PROVIDER_NONE.equals(cloudMessagingProvider)) {
+                cloudMessagingToken = "";
+              }
               List<SubscriptionRecord> subscriptions = normalizeSubscriptions(request == null ? null : request.safes());
 
               DeviceRecord deviceRecord =
-                  new DeviceRecord(deviceUuid, deviceType, cloudMessagingToken, Instant.now().toString());
+                  new DeviceRecord(
+                      deviceUuid, deviceType, cloudMessagingToken, cloudMessagingProvider, Instant.now().toString());
 
               upsertSubscriptions(deviceUuid, subscriptions);
               saveDeviceRecord(deviceRecord);
@@ -495,13 +505,19 @@ public class SafeNotificationService {
   }
 
   private String resolveTransport(DeviceRecord deviceRecord) {
-    if (deviceRecord == null || deviceRecord.cloudMessagingToken().isBlank()) {
+    if (deviceRecord == null
+        || deviceRecord.cloudMessagingToken().isBlank()
+        || PROVIDER_NONE.equals(deviceRecord.cloudMessagingProvider())) {
       return TRANSPORT_PULL_LOCAL;
     }
-    if ("android".equals(deviceRecord.deviceType()) && isFcmConfigured()) {
+    if ("android".equals(deviceRecord.deviceType())
+        && PROVIDER_FCM.equals(deviceRecord.cloudMessagingProvider())
+        && isFcmConfigured()) {
       return TRANSPORT_REMOTE_PUSH;
     }
-    if ("ios".equals(deviceRecord.deviceType()) && isApnsConfigured()) {
+    if ("ios".equals(deviceRecord.deviceType())
+        && PROVIDER_APNS.equals(deviceRecord.cloudMessagingProvider())
+        && isApnsConfigured()) {
       return TRANSPORT_REMOTE_PUSH;
     }
     return TRANSPORT_PULL_LOCAL;
@@ -558,18 +574,15 @@ public class SafeNotificationService {
   }
 
   private PushContent buildPushContent(NotificationRecord record) {
-    String safeShort = shortAddress(record.safeAddress(), 6, 4);
-    String hashShort = shortAddress(record.safeTxHash(), 10, 6);
     String title =
         "CONFIRMATION_REQUEST".equals(record.notificationType())
             ? "Safe confirmation needed"
             : "Safe transaction ready";
     String body =
         "CONFIRMATION_REQUEST".equals(record.notificationType())
-            ? "Safe " + safeShort + " · " + hashShort + " needs your confirmation ("
-                + record.confirmationsSubmitted() + "/" + record.confirmationsRequired() + ")."
-            : "Safe " + safeShort + " · " + hashShort + " reached threshold and is ready to execute.";
-    return new PushContent(title, body, buildSafeDeepLink(record));
+            ? "Open VeilWallet to review a Safe transaction that needs your confirmation."
+            : "Open VeilWallet to review a Safe transaction that is ready to execute.";
+    return new PushContent(title, body);
   }
 
   private boolean sendFcmNotification(
@@ -582,7 +595,6 @@ public class SafeNotificationService {
                 Map.of(
                     "notificationId", record.id(),
                     "notificationType", record.notificationType(),
-                    "safeDeepLink", content.deepLink(),
                     "title", content.title(),
                     "body", content.body()),
             "android", Map.of("priority", "HIGH"));
@@ -616,8 +628,7 @@ public class SafeNotificationService {
                     "alert", Map.of("title", content.title(), "body", content.body()),
                     "sound", "default"),
             "notificationId", record.id(),
-            "notificationType", record.notificationType(),
-            "safeDeepLink", content.deepLink());
+            "notificationType", record.notificationType());
 
     String host = apnsUseSandbox ? "https://api.sandbox.push.apple.com" : "https://api.push.apple.com";
     HttpRequest request =
@@ -798,6 +809,27 @@ public class SafeNotificationService {
     return "android";
   }
 
+  private static String normalizeCloudMessagingProvider(String value, String deviceType, String token) {
+    String normalized = normalizeToken(value).toLowerCase(Locale.ROOT);
+    String normalizedToken = normalizeToken(token);
+    if (PROVIDER_NONE.equals(normalized)) {
+      return PROVIDER_NONE;
+    }
+    if (PROVIDER_FCM.equals(normalized)) {
+      return "android".equals(deviceType) && !normalizedToken.isBlank() ? PROVIDER_FCM : PROVIDER_NONE;
+    }
+    if (PROVIDER_APNS.equals(normalized)) {
+      return "ios".equals(deviceType) && !normalizedToken.isBlank() ? PROVIDER_APNS : PROVIDER_NONE;
+    }
+    if (!normalized.isEmpty()) {
+      return PROVIDER_NONE;
+    }
+    if (normalizedToken.isBlank()) {
+      return PROVIDER_NONE;
+    }
+    return "ios".equals(deviceType) ? PROVIDER_APNS : PROVIDER_FCM;
+  }
+
   private static String normalizeToken(String value) {
     if (value == null) {
       return "";
@@ -960,10 +992,15 @@ public class SafeNotificationService {
     }
   }
 
-  private record PushContent(String title, String body, String deepLink) {}
+  private record PushContent(String title, String body) {}
 
   private record DeviceRecord(
-      String deviceUuid, String deviceType, String cloudMessagingToken, String updatedAt) {}
+      String deviceUuid, String deviceType, String cloudMessagingToken, String cloudMessagingProvider, String updatedAt) {
+    private DeviceRecord {
+      cloudMessagingProvider =
+          normalizeCloudMessagingProvider(cloudMessagingProvider, deviceType, cloudMessagingToken);
+    }
+  }
 
   private record SubscriptionRecord(
       int chainId, String safeAddress, List<String> ownerAddresses, List<String> notificationTypes) {}

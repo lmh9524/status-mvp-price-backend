@@ -24,6 +24,7 @@ class SafeCollaborationServiceTest {
   private static final String OWNER_2 = "0x2222222222222222222222222222222222222222";
   private static final String SAFE_A = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   private static final String SAFE_B = "0xbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+  private static final String SAFE_A_CHECKSUM = "0xaAaAaAaaAaAaAaaAaAAAAAAAAaaaAaAaAaaAaaAa";
   private static final String SAFE_TX_1 =
       "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
   private static final String SAFE_TX_2 =
@@ -84,7 +85,7 @@ class SafeCollaborationServiceTest {
     assertFalse(response.failedByOwner().containsKey(OWNER_1));
     SafeCollaborationDtos.DiscoveryItem first = response.items().get(0);
     assertEquals(1, first.chainId());
-    assertEquals(SAFE_A, first.safeAddress());
+    assertEquals(SAFE_A_CHECKSUM, first.safeAddress());
     assertEquals(List.of(OWNER_1, OWNER_2), first.ownerAddresses());
   }
 
@@ -147,7 +148,7 @@ class SafeCollaborationServiceTest {
                     ResponseEntity.ok(
                         "{\"results\":[{\"address\":\"" + SAFE_A + "\"}],\"next\":null}"));
               }
-              if (path.contains("/safes/" + SAFE_A + "/multisig-transactions/")) {
+              if (path.contains("/safes/" + SAFE_A_CHECKSUM + "/multisig-transactions/")) {
                 assertEquals("false", query.getFirst("executed"));
                 return Mono.just(
                     ResponseEntity.ok(
@@ -244,7 +245,7 @@ class SafeCollaborationServiceTest {
               if (path.contains("/owners/")) {
                 return Mono.just(ResponseEntity.status(404).body("{}"));
               }
-              if (path.contains("/safes/" + SAFE_A + "/multisig-transactions/")) {
+              if (path.contains("/safes/" + SAFE_A_CHECKSUM + "/multisig-transactions/")) {
                 return Mono.just(ResponseEntity.ok("{\"results\":[],\"next\":null}"));
               }
               return Mono.just(ResponseEntity.status(404).body("{}"));
@@ -286,7 +287,7 @@ class SafeCollaborationServiceTest {
                     ResponseEntity.ok(
                         "{\"results\":[{\"address\":\"" + SAFE_A + "\"}],\"next\":null}"));
               }
-              if (path.contains("/safes/" + SAFE_A + "/multisig-transactions/")) {
+              if (path.contains("/safes/" + SAFE_A_CHECKSUM + "/multisig-transactions/")) {
                 String offset = query.getFirst("offset");
                 if ("0".equals(offset)) {
                   return Mono.just(
@@ -443,7 +444,7 @@ class SafeCollaborationServiceTest {
                     ResponseEntity.ok(
                         "{\"results\":[{\"address\":\"" + SAFE_A + "\"}],\"next\":null}"));
               }
-              if (path.contains("/safes/" + SAFE_A + "/multisig-transactions/")) {
+              if (path.contains("/safes/" + SAFE_A_CHECKSUM + "/multisig-transactions/")) {
                 return Mono.just(
                     ResponseEntity.ok(
                         "{\"results\":[{\"safeTxHash\":\"" + SAFE_TX_1 + "\"}],\"next\":null}"));

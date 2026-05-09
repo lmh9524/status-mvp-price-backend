@@ -21,6 +21,7 @@ public final class SafeNotificationDtos {
       String deviceUuid,
       @Pattern(regexp = "^(ios|android)$") String deviceType,
       String cloudMessagingToken,
+      String cloudMessagingProvider,
       @NotNull List<@Valid SafeSubscription> safes) {}
 
   public record RegisterResponse(
