@@ -32,6 +32,10 @@ public class AcrossBridgeDirectoryService {
   private static final String CACHE_KEY_SWAP_CHAINS = "bridge:across:swap:chains";
   private static final String CACHE_KEY_SWAP_TOKENS = "bridge:across:swap:tokens";
   private static final String ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+  private static final Map<String, String> DISPLAY_SYMBOL_ALIASES =
+      Map.of(
+          "USDC-BNB", "USDC",
+          "USDT-BNB", "USDT");
 
   // P0: Across directory currently returns logoUrl pointing at across-protocol/frontend raw GitHub paths, which are
   // widely 404 (repo is not public). Override chain logos to known-good public sources and drop dead upstream URLs.
@@ -211,7 +215,7 @@ public class AcrossBridgeDirectoryService {
     for (Chain c : chainShells) {
       List<Token> tokens =
           tokensByChain.getOrDefault(c.chainId(), List.of()).stream()
-              .filter(t -> bridgeableSymbols.contains(upper(t.symbol())))
+              .filter(t -> bridgeableSymbols.contains(displayTokenSymbol(t.symbol())))
               .toList();
       if (tokens.isEmpty()) continue;
       chains.add(
@@ -274,9 +278,15 @@ public class AcrossBridgeDirectoryService {
       if (chainId <= 0) continue;
       if (chainAllow != null && !chainAllow.isEmpty() && !chainAllow.contains(chainId)) continue;
 
-      String symbol = upper(t.path("symbol").asText(""));
+      String rawSymbol = upper(t.path("symbol").asText(""));
+      String symbol = displayTokenSymbol(rawSymbol);
       if (symbol.isBlank()) continue;
-      if (tokenAllow != null && !tokenAllow.isEmpty() && !tokenAllow.contains(symbol)) continue;
+      if (tokenAllow != null
+          && !tokenAllow.isEmpty()
+          && !tokenAllow.contains(symbol)
+          && !tokenAllow.contains(rawSymbol)) {
+        continue;
+      }
 
       String address = t.path("address").asText(null);
       int decimals = t.path("decimals").asInt(0);
@@ -297,7 +307,7 @@ public class AcrossBridgeDirectoryService {
     Map<String, Set<Long>> chainsBySymbol = new java.util.HashMap<>();
     for (Map.Entry<Long, List<Token>> entry : tokensByChain.entrySet()) {
       for (Token token : entry.getValue()) {
-        String symbol = upper(token.symbol());
+        String symbol = displayTokenSymbol(token.symbol());
         if (symbol.isBlank()) continue;
         chainsBySymbol.computeIfAbsent(symbol, ignored -> new HashSet<>()).add(entry.getKey());
       }
@@ -313,13 +323,13 @@ public class AcrossBridgeDirectoryService {
     List<Route> routes = new ArrayList<>();
     for (Chain origin : chains) {
       for (Token input : origin.inputTokens()) {
-        String symbol = upper(input.symbol());
+        String symbol = displayTokenSymbol(input.symbol());
         if (symbol.isBlank()) continue;
         for (Chain destination : chains) {
           if (origin.chainId() == destination.chainId()) continue;
           Optional<Token> output =
               destination.outputTokens().stream()
-                  .filter(t -> symbol.equals(upper(t.symbol())))
+                  .filter(t -> symbol.equals(displayTokenSymbol(t.symbol())))
                   .findFirst();
           if (output.isEmpty()) continue;
           routes.add(
@@ -532,6 +542,11 @@ public class AcrossBridgeDirectoryService {
   private static String upper(String raw) {
     if (raw == null) return "";
     return raw.trim().toUpperCase(Locale.ROOT);
+  }
+
+  private static String displayTokenSymbol(String raw) {
+    String symbol = upper(raw);
+    return DISPLAY_SYMBOL_ALIASES.getOrDefault(symbol, symbol);
   }
 
   private static String normalizeBlankToNull(String raw) {

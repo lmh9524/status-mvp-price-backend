@@ -106,6 +106,22 @@ class AcrossBridgeDirectoryServiceTest {
       ]
       """;
 
+  private static final String SWAP_CHAINS_JSON =
+      """
+      [
+        { "chainId": 1, "name": "Ethereum", "logoUrl": null },
+        { "chainId": 56, "name": "BNB Smart Chain", "logoUrl": null }
+      ]
+      """;
+
+  private static final String SWAP_TOKENS_JSON =
+      """
+      [
+        { "chainId": 1, "address": "0xdAC17F958D2ee523a2206206994597C13D831ec7", "symbol": "USDT", "name": "Tether USD", "decimals": 6, "logoUrl": null },
+        { "chainId": 56, "address": "0x55d398326f99059fF775485246999027B3197955", "symbol": "USDT-BNB", "name": "Tether USD", "decimals": 18, "logoUrl": null }
+      ]
+      """;
+
   @Test
   void strictTokenAllowlistKeepsLegacyFiltering() {
     AcrossBridgeDirectoryService service =
@@ -150,14 +166,60 @@ class AcrossBridgeDirectoryServiceTest {
     assertEquals(3, response.routes().size());
   }
 
+  @Test
+  void swapDirectoryNormalizesBscUsdtForRoutes() {
+    AcrossBridgeDirectoryService service =
+        createService("FULL", "ALL_ON_ALLOWED_CHAINS", "1,56", "USDT", "test-api-key");
+
+    BridgeAcrossDirectoryResponse response = service.getDirectory();
+
+    assertIterableEquals(List.of(1L, 56L), response.allowlist().chainIds());
+    assertIterableEquals(List.of("USDT"), response.allowlist().tokenSymbols());
+    assertEquals(
+        List.of("USDT"),
+        response.chains().stream()
+            .filter(chain -> chain.chainId() == 56L)
+            .findFirst()
+            .orElseThrow()
+            .inputTokens()
+            .stream()
+            .map(BridgeAcrossDirectoryResponse.Token::symbol)
+            .toList());
+    assertEquals(2, response.routes().size());
+    assertEquals(
+        List.of("1->56:USDT->USDT", "56->1:USDT->USDT"),
+        response.routes().stream()
+            .map(
+                route ->
+                    route.originChainId()
+                        + "->"
+                        + route.destinationChainId()
+                        + ":"
+                        + route.inputTokenSymbol()
+                        + "->"
+                        + route.outputTokenSymbol())
+            .toList());
+  }
+
   private static AcrossBridgeDirectoryService createService(
       String allowlistMode,
       String tokenAllowlistMode,
       String allowedChainIds,
       String allowedTokenSymbols) {
+    return createService(allowlistMode, tokenAllowlistMode, allowedChainIds, allowedTokenSymbols, "");
+  }
+
+  private static AcrossBridgeDirectoryService createService(
+      String allowlistMode,
+      String tokenAllowlistMode,
+      String allowedChainIds,
+      String allowedTokenSymbols,
+      String apiKey) {
     RedisCache cache = mock(RedisCache.class);
     when(cache.get("bridge:across:chains")).thenReturn(Optional.empty());
     when(cache.get("bridge:across:available-routes")).thenReturn(Optional.empty());
+    when(cache.get("bridge:across:swap:chains")).thenReturn(Optional.empty());
+    when(cache.get("bridge:across:swap:tokens")).thenReturn(Optional.empty());
     doNothing().when(cache).set(org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyLong());
 
     ExchangeFunction exchangeFunction =
@@ -173,7 +235,7 @@ class AcrossBridgeDirectoryServiceTest {
         webClient,
         cache,
         "https://app.across.to/api",
-        "",
+        apiKey,
         12000L,
         300L,
         60L,
@@ -185,6 +247,8 @@ class AcrossBridgeDirectoryServiceTest {
 
   private static String responseBodyFor(ClientRequest request) {
     String path = request.url().getPath();
+    if (path.endsWith("/swap/chains")) return SWAP_CHAINS_JSON;
+    if (path.endsWith("/swap/tokens")) return SWAP_TOKENS_JSON;
     if (path.endsWith("/chains")) return CHAINS_JSON;
     if (path.endsWith("/available-routes")) return ROUTES_JSON;
     throw new IllegalArgumentException("Unexpected request path: " + path);
