@@ -37,6 +37,8 @@ public class SafeTxServiceGatewayController {
       new SafeTxServiceGatewayService.CachePolicy(5, 120, 2);
   private static final SafeTxServiceGatewayService.CachePolicy BALANCES_CACHE =
       new SafeTxServiceGatewayService.CachePolicy(10, 120, 2);
+  private static final SafeTxServiceGatewayService.CachePolicy ACTIVITY_CACHE =
+      new SafeTxServiceGatewayService.CachePolicy(10, 120, 2);
 
   private final SafeTxServiceGatewayService gateway;
 
@@ -118,6 +120,60 @@ public class SafeTxServiceGatewayController {
         resolveClientIp(exchange),
         deviceId,
         TX_LIST_CACHE);
+  }
+
+  @GetMapping({"/{chain}/api/v1/safes/{address}/all-transactions", "/{chain}/api/v1/safes/{address}/all-transactions/"})
+  public Mono<ResponseEntity<String>> listAllTransactions(
+      @PathVariable("chain") String chain,
+      @PathVariable("address") @NotBlank String address,
+      @RequestParam(required = false) MultiValueMap<String, String> query,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    if (deviceId == null || deviceId.isBlank()) return missingDeviceId();
+    String c = normalizeChain(chain);
+    return gateway.get(
+        c,
+        "/api/v1/safes/" + address + "/all-transactions/",
+        query,
+        resolveClientIp(exchange),
+        deviceId,
+        ACTIVITY_CACHE);
+  }
+
+  @GetMapping({"/{chain}/api/v1/safes/{address}/incoming-transfers", "/{chain}/api/v1/safes/{address}/incoming-transfers/"})
+  public Mono<ResponseEntity<String>> listIncomingTransfers(
+      @PathVariable("chain") String chain,
+      @PathVariable("address") @NotBlank String address,
+      @RequestParam(required = false) MultiValueMap<String, String> query,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    if (deviceId == null || deviceId.isBlank()) return missingDeviceId();
+    String c = normalizeChain(chain);
+    return gateway.get(
+        c,
+        "/api/v1/safes/" + address + "/incoming-transfers/",
+        query,
+        resolveClientIp(exchange),
+        deviceId,
+        ACTIVITY_CACHE);
+  }
+
+  @GetMapping({"/{chain}/api/v1/safes/{address}/module-transactions", "/{chain}/api/v1/safes/{address}/module-transactions/"})
+  public Mono<ResponseEntity<String>> listModuleTransactions(
+      @PathVariable("chain") String chain,
+      @PathVariable("address") @NotBlank String address,
+      @RequestParam(required = false) MultiValueMap<String, String> query,
+      @RequestHeader(value = "X-Device-Id", required = false) String deviceId,
+      ServerWebExchange exchange) {
+    if (deviceId == null || deviceId.isBlank()) return missingDeviceId();
+    String c = normalizeChain(chain);
+    return gateway.get(
+        c,
+        "/api/v1/safes/" + address + "/module-transactions/",
+        query,
+        resolveClientIp(exchange),
+        deviceId,
+        ACTIVITY_CACHE);
   }
 
   @GetMapping({"/{chain}/api/v2/multisig-transactions/{safeTxHash}", "/{chain}/api/v2/multisig-transactions/{safeTxHash}/"})

@@ -89,6 +89,60 @@ public class SafeTxServiceProxyController {
         });
   }
 
+  @GetMapping("/{chain}/safes/{address}/all-transactions")
+  public Mono<ResponseEntity<String>> listAllTransactions(
+      @PathVariable("chain") String chain,
+      @PathVariable("address") @NotBlank String address,
+      @RequestParam(value = "ordering", required = false) String ordering,
+      @RequestParam(value = "limit", required = false) Integer limit,
+      @RequestParam(value = "offset", required = false) Integer offset) {
+    return whenEnabled(
+        () -> {
+          String c = normalizeChain(chain);
+          MultiValueMap<String, String> q = new LinkedMultiValueMap<>();
+          if (ordering != null && !ordering.isBlank()) q.add("ordering", ordering);
+          if (limit != null) q.add("limit", String.valueOf(limit));
+          if (offset != null) q.add("offset", String.valueOf(offset));
+          return safeTxService.get(c, "/api/v1/safes/" + address + "/all-transactions/", q);
+        });
+  }
+
+  @GetMapping("/{chain}/safes/{address}/incoming-transfers")
+  public Mono<ResponseEntity<String>> listIncomingTransfers(
+      @PathVariable("chain") String chain,
+      @PathVariable("address") @NotBlank String address,
+      @RequestParam(value = "ordering", required = false) String ordering,
+      @RequestParam(value = "limit", required = false) Integer limit,
+      @RequestParam(value = "offset", required = false) Integer offset) {
+    return whenEnabled(
+        () -> {
+          String c = normalizeChain(chain);
+          MultiValueMap<String, String> q = new LinkedMultiValueMap<>();
+          if (ordering != null && !ordering.isBlank()) q.add("ordering", ordering);
+          if (limit != null) q.add("limit", String.valueOf(limit));
+          if (offset != null) q.add("offset", String.valueOf(offset));
+          return safeTxService.get(c, "/api/v1/safes/" + address + "/incoming-transfers/", q);
+        });
+  }
+
+  @GetMapping("/{chain}/safes/{address}/module-transactions")
+  public Mono<ResponseEntity<String>> listModuleTransactions(
+      @PathVariable("chain") String chain,
+      @PathVariable("address") @NotBlank String address,
+      @RequestParam(value = "ordering", required = false) String ordering,
+      @RequestParam(value = "limit", required = false) Integer limit,
+      @RequestParam(value = "offset", required = false) Integer offset) {
+    return whenEnabled(
+        () -> {
+          String c = normalizeChain(chain);
+          MultiValueMap<String, String> q = new LinkedMultiValueMap<>();
+          if (ordering != null && !ordering.isBlank()) q.add("ordering", ordering);
+          if (limit != null) q.add("limit", String.valueOf(limit));
+          if (offset != null) q.add("offset", String.valueOf(offset));
+          return safeTxService.get(c, "/api/v1/safes/" + address + "/module-transactions/", q);
+        });
+  }
+
   @GetMapping("/{chain}/multisig-transactions/{safeTxHash}")
   public Mono<ResponseEntity<String>> getMultisigTransaction(
       @PathVariable("chain") String chain,
