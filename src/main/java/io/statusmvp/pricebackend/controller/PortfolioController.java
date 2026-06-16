@@ -27,10 +27,11 @@ public class PortfolioController {
   @GetMapping("/portfolio")
   public Mono<PortfolioSnapshot> getPortfolio(
       @RequestParam("address") @NotBlank String address,
-      @RequestParam(value = "chainIds", required = false) String chainIds) {
+      @RequestParam(value = "chainIds", required = false) String chainIds,
+      @RequestParam(value = "refresh", required = false, defaultValue = "false") boolean refresh) {
     List<Integer> parsed = portfolio.parseChainIds(chainIds);
     boolean chainIdsExplicitlyRequested = chainIds != null && !chainIds.isBlank();
-    return Mono.fromCallable(() -> portfolio.getPortfolio(address, parsed, chainIdsExplicitlyRequested))
+    return Mono.fromCallable(() -> portfolio.getPortfolio(address, parsed, chainIdsExplicitlyRequested, refresh))
         .subscribeOn(Schedulers.boundedElastic());
   }
 
@@ -41,13 +42,14 @@ public class PortfolioController {
       @RequestParam(value = "currency", required = false, defaultValue = "usd") String currency,
       @RequestParam(value = "minUsd", required = false) Double minUsd,
       @RequestParam(value = "includeZero", required = false) Boolean includeZero,
-      @RequestParam(value = "limit", required = false) Integer limit) {
+      @RequestParam(value = "limit", required = false) Integer limit,
+      @RequestParam(value = "refresh", required = false, defaultValue = "false") boolean refresh) {
     List<Integer> parsed = portfolio.parseChainIds(chainIds);
     boolean chainIdsExplicitlyRequested = chainIds != null && !chainIds.isBlank();
     return Mono.fromCallable(
             () ->
                 portfolio.getPortfolioSnapshotV2(
-                    address, parsed, currency, minUsd, includeZero, limit, chainIdsExplicitlyRequested))
+                    address, parsed, currency, minUsd, includeZero, limit, chainIdsExplicitlyRequested, refresh))
         .subscribeOn(Schedulers.boundedElastic());
   }
 }

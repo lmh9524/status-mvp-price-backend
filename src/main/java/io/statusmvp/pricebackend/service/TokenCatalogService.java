@@ -446,25 +446,38 @@ public class TokenCatalogService {
 
   private static int score(TokenSearchItem item, String query) {
     if (query == null || query.isBlank()) return 0;
-    String q = query.toLowerCase(Locale.ROOT);
+    String q = query.trim().toLowerCase(Locale.ROOT);
     String symbol = lower(item.symbol());
     String name = lower(item.name());
     String address = lower(item.address());
+    boolean canMatchAddress = shouldMatchAddressQuery(q);
     if (symbol.equals(q)) return 0;
     if (name.equals(q)) return 1;
     if (symbol.startsWith(q)) return 2;
     if (name.startsWith(q)) return 3;
-    if (address.equals(q)) return 4;
+    if (canMatchAddress && address.equals(q)) return 4;
     if (symbol.contains(q)) return 5;
     if (name.contains(q)) return 6;
-    if (address.contains(q)) return 7;
+    if (canMatchAddress && address.contains(q)) return 7;
     return 99;
   }
 
   private static boolean matches(TokenSearchItem item, String query) {
     if (query == null || query.isBlank()) return true;
-    String q = query.toLowerCase(Locale.ROOT);
-    return lower(item.symbol()).contains(q) || lower(item.name()).contains(q) || lower(item.address()).contains(q);
+    String q = query.trim().toLowerCase(Locale.ROOT);
+    if (lower(item.symbol()).contains(q) || lower(item.name()).contains(q)) return true;
+    return shouldMatchAddressQuery(q) && lower(item.address()).contains(q);
+  }
+
+  private static boolean shouldMatchAddressQuery(String normalizedQuery) {
+    if (normalizedQuery == null || normalizedQuery.isBlank()) return false;
+    if (normalizedQuery.startsWith("0x")) {
+      return normalizedQuery.length() >= 4 && normalizedQuery.matches("^0x[0-9a-f]*$");
+    }
+    if (normalizedQuery.length() >= 8 && normalizedQuery.matches("^[0-9a-f]+$")) return true;
+    return normalizedQuery.length() >= 6
+        && normalizedQuery.matches("^[a-z0-9]+$")
+        && normalizedQuery.matches(".*\\d.*");
   }
 
   private static int confidenceRank(String confidence) {
