@@ -20,7 +20,7 @@ import reactor.core.publisher.Mono;
 
 class SafeAssetBalanceServiceTest {
   private static final String SAFE = "0xb3dd73d914c79019f091b5aedc37aad2e0000000";
-  private static final String VEILX = "0x75999a8ee8f52666c4d76f6d0f8e7e914334762a";
+  private static final String VEILX = "0x8435de540ed40903b6e74181d13cead693e27888";
   private static final String UNKNOWN = "0x1111111111111111111111111111111111111111";
 
   @Test

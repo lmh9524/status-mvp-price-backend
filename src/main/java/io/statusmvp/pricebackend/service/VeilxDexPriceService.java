@@ -28,11 +28,11 @@ import org.web3j.protocol.core.methods.request.Transaction;
 import org.web3j.protocol.core.methods.response.EthCall;
 
 /**
- * VEILX price source (BSC mainnet) via PancakeSwap V2 Router getAmountsOut().
+ * VEIL ecosystem price source (BSC mainnet) via PancakeSwap V2 Router getAmountsOut().
  *
- * <p>Returns "1 VEILX ~ X USDT" and treats USDT~USD for MVP.
+ * <p>Returns "1 token ~ X USDT" and treats USDT~USD for MVP.
  *
- * <p>Enable by setting {@code BSC_RPC_URL} and {@code VEILX_CONTRACT_ADDRESS}.
+ * <p>Enable by setting {@code BSC_RPC_URL} and the relevant token contract address.
  */
 @Component
 public class VeilxDexPriceService {
@@ -47,11 +47,13 @@ public class VeilxDexPriceService {
 
   private final Optional<Web3j> web3j;
   private final String routerAddress;
+  private final String veilAddress;
   private final String veilxAddress;
   private final String usdtAddress;
   private final String viplAddress = normalizeAddress(DEFAULT_BSC_VIPL);
 
   // Cache decimals to avoid extra calls
+  private final AtomicReference<Integer> veilDecimals = new AtomicReference<>(null);
   private final AtomicReference<Integer> veilxDecimals = new AtomicReference<>(null);
   private final AtomicReference<Integer> viplDecimals = new AtomicReference<>(null);
   private final AtomicReference<Integer> usdtDecimals = new AtomicReference<>(null);
@@ -59,16 +61,23 @@ public class VeilxDexPriceService {
   public VeilxDexPriceService(
       ObjectProvider<Web3j> bscWeb3jProvider,
       @Value("${app.dex.pancake.routerAddress:" + DEFAULT_PANCAKE_ROUTER_V2 + "}") String routerAddress,
+      @Value("${app.dex.veil.address:}") String veilAddress,
       @Value("${app.dex.veilx.address:}") String veilxAddress,
       @Value("${app.dex.usdt.address:" + DEFAULT_BSC_USDT + "}") String usdtAddress) {
     this.web3j = Optional.ofNullable(bscWeb3jProvider.getIfAvailable());
     this.routerAddress = normalizeAddress(routerAddress);
+    this.veilAddress = normalizeAddress(veilAddress);
     this.veilxAddress = normalizeAddress(veilxAddress);
     this.usdtAddress = normalizeAddress(usdtAddress);
   }
 
   public boolean isEnabled() {
     return web3j.isPresent() && !routerAddress.isBlank() && !usdtAddress.isBlank();
+  }
+
+  /** Returns the configured VEIL contract address (lowercased), or empty string if not set. */
+  public String veilContractLower() {
+    return veilAddress == null ? "" : veilAddress.trim().toLowerCase();
   }
 
   /** Returns the configured VEILX contract address (lowercased), or empty string if not set. */
@@ -79,6 +88,11 @@ public class VeilxDexPriceService {
   /** Returns the configured VIPL contract address (lowercased). */
   public String viplContractLower() {
     return viplAddress == null ? "" : viplAddress.trim().toLowerCase();
+  }
+
+  /** Returns VEIL price in USD (via USDT), e.g. 0.0042. */
+  public Optional<Double> fetchVeilUsdPrice() {
+    return fetchUsdPriceByToken(veilAddress, veilDecimals, "VEIL");
   }
 
   /** Returns VEILX price in USD (via USDT), e.g. 0.0042. */
@@ -166,5 +180,3 @@ public class VeilxDexPriceService {
     return a.isEmpty() ? "" : a;
   }
 }
-
-

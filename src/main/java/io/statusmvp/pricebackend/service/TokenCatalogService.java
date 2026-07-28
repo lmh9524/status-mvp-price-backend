@@ -671,7 +671,8 @@ public class TokenCatalogService {
           token(56, "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", "erc20", "USDC", "USD Coin", 18, null),
           token(56, "0x55d398326f99059fF775485246999027B3197955", "erc20", "USDT", "Tether USD", 18, null),
           token(56, "0xbb4CdB9CBd36B01bD1cBaEBF2De08d9173bc095c", "erc20", "WBNB", "Wrapped BNB", 18, null),
-          token(56, "0x75999a8EE8F52666c4d76f6d0f8E7E914334762A", "erc20", "VEILX", "VEILX", 18, "asset://walletPage/veilx_token_icon"),
+          token(56, "0xdDcEC2492a48047b494E21Ac97ed7E066307d999", "erc20", "VEIL", "VEIL", 18, null),
+          token(56, "0x8435dE540ED40903B6E74181D13cEAD693E27888", "erc20", "VEILX", "VEILX", 18, "asset://walletPage/veilx_token_icon"),
           token(56, "0x796B08f7BA8d1859Ea4B9FBFECe57D06A1b49F88", "erc20", "VIPL", "VeilPlus", 18, "asset://walletPage/vipl_token_icon"),
           token(196, "0x74b7F16337B8972027f6196a17A631ac6DE26d22", "erc20", "USDC", "USD Coin", 6, "asset://token/usdc"),
           token(195, "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", "trc20", "USDT", "Tether USD", 6, null));

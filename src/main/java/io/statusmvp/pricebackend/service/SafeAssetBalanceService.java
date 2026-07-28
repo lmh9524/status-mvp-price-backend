@@ -36,7 +36,8 @@ public class SafeAssetBalanceService {
           42161, "arb1");
   private static final Set<String> DEFAULT_VISIBLE_TOKEN_KEYS =
       Set.of(
-          "56:0x75999a8ee8f52666c4d76f6d0f8e7e914334762a",
+          "56:0xddcec2492a48047b494e21ac97ed7e066307d999",
+          "56:0x8435de540ed40903b6e74181d13cead693e27888",
           "56:0x796b08f7ba8d1859ea4b9fbfece57d06a1b49f88");
 
   private final SafeTxServiceClient safeTxService;
