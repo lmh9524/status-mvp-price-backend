@@ -105,47 +105,70 @@ public class VeilxDexPriceService {
     return fetchUsdPriceByToken(viplAddress, viplDecimals, "VIPL");
   }
 
+  // Thin/volatile pools and transient RPC hiccups intermittently make a single getAmountsOut()
+  // call fail even though the pair is genuinely quotable; a couple of short-backoff retries
+  // smooth that over without masking a real "no liquidity" outcome.
+  private static final int QUOTE_MAX_ATTEMPTS = 3;
+  private static final long QUOTE_RETRY_BACKOFF_MILLIS = 250;
+
   private Optional<Double> fetchUsdPriceByToken(
       String tokenAddress, AtomicReference<Integer> tokenDecimals, String tokenSymbol) {
     if (!isEnabled() || tokenAddress.isBlank()) return Optional.empty();
-    try {
-      int tokenDec = getDecimalsCached(tokenAddress, tokenDecimals, 18);
-      int uDec = getDecimalsCached(usdtAddress, usdtDecimals, 18);
 
-      BigInteger amountIn = BigInteger.TEN.pow(tokenDec); // 1 token
-      Function fn =
-          new Function(
-              "getAmountsOut",
-              Arrays.asList(
-                  new Uint256(amountIn),
-                  new DynamicArray<>(Address.class, new Address(tokenAddress), new Address(usdtAddress))),
-              Collections.singletonList(new TypeReference<DynamicArray<Uint256>>() {}));
+    int tokenDec = getDecimalsCached(tokenAddress, tokenDecimals, 18);
+    int uDec = getDecimalsCached(usdtAddress, usdtDecimals, 18);
 
-      String data = FunctionEncoder.encode(fn);
-      Transaction tx = Transaction.createEthCallTransaction(null, routerAddress, data);
-      EthCall resp = web3j.get().ethCall(tx, DefaultBlockParameterName.LATEST).send();
-      if (resp.hasError()) {
-        log.warn("{} DEX price eth_call error: {}", tokenSymbol, resp.getError().getMessage());
-        return Optional.empty();
+    for (int attempt = 1; attempt <= QUOTE_MAX_ATTEMPTS; attempt++) {
+      try {
+        Optional<Double> price = queryAmountsOutOnce(tokenAddress, tokenDec, uDec);
+        if (price.isPresent()) return price;
+      } catch (Exception e) {
+        log.warn(
+            "{} DEX price request failed (attempt {}/{})", tokenSymbol, attempt, QUOTE_MAX_ATTEMPTS, e);
       }
+      if (attempt < QUOTE_MAX_ATTEMPTS) {
+        try {
+          Thread.sleep(QUOTE_RETRY_BACKOFF_MILLIS);
+        } catch (InterruptedException ie) {
+          Thread.currentThread().interrupt();
+          break;
+        }
+      }
+    }
+    return Optional.empty();
+  }
 
-      @SuppressWarnings("rawtypes")
-      List<Type> decoded = FunctionReturnDecoder.decode(resp.getValue(), fn.getOutputParameters());
-      if (decoded.isEmpty()) return Optional.empty();
-      @SuppressWarnings("unchecked")
-      List<Uint256> amounts = ((DynamicArray<Uint256>) decoded.get(0)).getValue();
-      if (amounts.size() < 2) return Optional.empty();
+  private Optional<Double> queryAmountsOutOnce(String tokenAddress, int tokenDec, int uDec) throws Exception {
+    BigInteger amountIn = BigInteger.TEN.pow(tokenDec); // 1 token
+    Function fn =
+        new Function(
+            "getAmountsOut",
+            Arrays.asList(
+                new Uint256(amountIn),
+                new DynamicArray<>(Address.class, new Address(tokenAddress), new Address(usdtAddress))),
+            Collections.singletonList(new TypeReference<DynamicArray<Uint256>>() {}));
 
-      BigInteger outRaw = amounts.get(amounts.size() - 1).getValue();
-      if (outRaw.signum() <= 0) return Optional.empty();
-
-      BigDecimal outUsdt = new BigDecimal(outRaw).movePointLeft(uDec);
-      BigDecimal price = outUsdt.setScale(8, RoundingMode.HALF_UP);
-      return Optional.of(price.doubleValue());
-    } catch (Exception e) {
-      log.warn("{} DEX price request failed", tokenSymbol, e);
+    String data = FunctionEncoder.encode(fn);
+    Transaction tx = Transaction.createEthCallTransaction(null, routerAddress, data);
+    EthCall resp = web3j.get().ethCall(tx, DefaultBlockParameterName.LATEST).send();
+    if (resp.hasError()) {
+      log.warn("DEX price eth_call error: {}", resp.getError().getMessage());
       return Optional.empty();
     }
+
+    @SuppressWarnings("rawtypes")
+    List<Type> decoded = FunctionReturnDecoder.decode(resp.getValue(), fn.getOutputParameters());
+    if (decoded.isEmpty()) return Optional.empty();
+    @SuppressWarnings("unchecked")
+    List<Uint256> amounts = ((DynamicArray<Uint256>) decoded.get(0)).getValue();
+    if (amounts.size() < 2) return Optional.empty();
+
+    BigInteger outRaw = amounts.get(amounts.size() - 1).getValue();
+    if (outRaw.signum() <= 0) return Optional.empty();
+
+    BigDecimal outUsdt = new BigDecimal(outRaw).movePointLeft(uDec);
+    BigDecimal price = outUsdt.setScale(8, RoundingMode.HALF_UP);
+    return Optional.of(price.doubleValue());
   }
 
   private int getDecimalsCached(String token, AtomicReference<Integer> cache, int fallback) {

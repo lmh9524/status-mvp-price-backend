@@ -36,6 +36,7 @@ public class PriceAggregatorService {
 
   private final long priceTtlSeconds;
   private final long requestTtlSeconds;
+  private final long lastGoodPriceTtlSeconds;
 
   // Accept exchange-friendly symbols (Binance/CMC) to avoid URI encoding failures.
   private static final Pattern SAFE_EXCHANGE_SYMBOL = Pattern.compile("^[A-Z0-9]{1,20}$");
@@ -53,7 +54,8 @@ public class PriceAggregatorService {
       VeilxDexPriceService veilxDex,
       PriceHistoryService priceHistory,
       @Value("${app.cache.priceTtlSeconds:120}") long priceTtlSeconds,
-      @Value("${app.cache.requestTtlSeconds:30}") long requestTtlSeconds) {
+      @Value("${app.cache.requestTtlSeconds:30}") long requestTtlSeconds,
+      @Value("${app.cache.lastGoodPriceTtlSeconds:259200}") long lastGoodPriceTtlSeconds) {
     this.coinGecko = coinGecko;
     this.cmc = cmc;
     this.binance = binance;
@@ -64,6 +66,7 @@ public class PriceAggregatorService {
     this.priceHistory = priceHistory;
     this.priceTtlSeconds = priceTtlSeconds;
     this.requestTtlSeconds = requestTtlSeconds;
+    this.lastGoodPriceTtlSeconds = lastGoodPriceTtlSeconds;
   }
 
   public List<PriceQuote> getPrices(List<String> symbols, String currency) {
@@ -220,7 +223,25 @@ public class PriceAggregatorService {
       }
     }
 
-    if ("usd".equals(currency) && priceHistory != null && positiveOrNull(price) != null) {
+    // 8) Last-known-good fallback. Long-tail on-chain tokens (VEIL/VEILX/VIPL) sit behind thin
+    // liquidity and tax/anti-bot contracts, so every live source above can miss intermittently even
+    // though a real price exists. Rather than surface null (-> "$0.00" client-side), serve the most
+    // recent successfully-fetched price until a fresh one comes in.
+    String lastGoodKey = "price:lastgood:" + symbol + ":" + currency;
+    if (price == null) {
+      price = readLastGoodPrice(lastGoodKey);
+      if (price != null) {
+        change24hPct = null;
+        source = "stale_cache";
+      }
+    } else {
+      cache.set(lastGoodKey, price.toString(), lastGoodPriceTtlSeconds);
+    }
+
+    if ("usd".equals(currency)
+        && priceHistory != null
+        && positiveOrNull(price) != null
+        && !"stale_cache".equals(source)) {
       String historyAssetKey = PriceHistoryService.symbolAssetKey(lookup.isBlank() ? symbol : lookup);
       change24hPct = priceHistory.resolveChange24hPct(historyAssetKey, price, change24hPct, ts);
     }
@@ -230,6 +251,16 @@ public class PriceAggregatorService {
       cache.set(key, mapper.writeValueAsString(q), priceTtlSeconds);
     } catch (Exception ignored) {}
     return q;
+  }
+
+  private Double readLastGoodPrice(String key) {
+    return cache.get(key).map(v -> {
+      try {
+        return Double.valueOf(v);
+      } catch (NumberFormatException e) {
+        return null;
+      }
+    }).orElse(null);
   }
 
   private static boolean isSafeExchangeSymbol(String symbol) {
@@ -428,20 +459,30 @@ public class PriceAggregatorService {
       PriceMarketData quote = quotesByAddress.get(addr);
       Double price = quote != null ? quote.price() : null;
       Double change24hPct = quote != null ? quote.change24hPct() : null;
-      if ("usd".equals(cur) && priceHistory != null && positiveOrNull(price) != null) {
+      String source = sourceByAddress.get(addr);
+
+      // Last-known-good fallback, mirroring getSingleSymbolPrice: long-tail contract quotes
+      // (VEIL/VEILX/VIPL) can miss intermittently even though a real price exists.
+      String lastGoodKey = "price:lastgood:contract:" + chainId + ":" + addr + ":" + cur;
+      if (positiveOrNull(price) == null) {
+        Double stale = readLastGoodPrice(lastGoodKey);
+        if (stale != null) {
+          price = stale;
+          change24hPct = null;
+          source = "stale_cache";
+        }
+      } else {
+        cache.set(lastGoodKey, price.toString(), lastGoodPriceTtlSeconds);
+      }
+
+      if ("usd".equals(cur)
+          && priceHistory != null
+          && positiveOrNull(price) != null
+          && !"stale_cache".equals(source)) {
         String historyAssetKey = PriceHistoryService.contractAssetKey(chainId, addr);
         change24hPct = priceHistory.resolveChange24hPct(historyAssetKey, price, change24hPct, ts);
       }
-      out.add(
-          new PriceQuote(
-              null,
-              price,
-              change24hPct,
-              cur,
-              ts,
-              sourceByAddress.get(addr),
-              addr,
-              chainId));
+      out.add(new PriceQuote(null, price, change24hPct, cur, ts, source, addr, chainId));
     }
 
     try {
