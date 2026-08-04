@@ -1,10 +1,13 @@
 package io.statusmvp.pricebackend.client;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import io.statusmvp.pricebackend.model.PriceCandle;
 import io.statusmvp.pricebackend.model.PriceMarketData;
 import java.net.URI;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import org.slf4j.Logger;
@@ -241,6 +244,162 @@ public class CoinGeckoClient {
           uri,
           e);
       return out;
+    }
+  }
+
+  /**
+   * Top liquidity pool address for a token, used as the OHLCV source pool. Backed by GeckoTerminal
+   * data (same provider as CoinGecko's onchain endpoints).
+   */
+  public Optional<String> fetchOnchainTopPoolAddress(String networkId, String tokenAddress) {
+    if (!isEnabled() || networkId == null || networkId.isBlank() || tokenAddress == null || tokenAddress.isBlank()) {
+      return Optional.empty();
+    }
+
+    URI uri =
+        UriComponentsBuilder.fromUriString(
+                baseUrl + "/onchain/networks/" + networkId + "/tokens/" + tokenAddress + "/pools")
+            .queryParam("page", 1)
+            .build(true)
+            .toUri();
+
+    try {
+      JsonNode root =
+          webClient
+              .get()
+              .uri(uri)
+              .headers(h -> {
+                if (!apiKey.isBlank()) h.set("x-cg-pro-api-key", apiKey);
+              })
+              .retrieve()
+              .bodyToMono(JsonNode.class)
+              .timeout(Duration.ofSeconds(15))
+              .block();
+      if (root == null) return Optional.empty();
+      JsonNode first = root.path("data").get(0);
+      if (first == null) return Optional.empty();
+      String address = first.path("attributes").path("address").asText(null);
+      if (address == null || address.isBlank()) return Optional.empty();
+      return Optional.of(address);
+    } catch (Exception e) {
+      log.warn(
+          "CoinGecko onchain top-pool lookup failed for networkId='{}' token='{}' uri={}",
+          networkId,
+          tokenAddress,
+          uri,
+          e);
+      return Optional.empty();
+    }
+  }
+
+  /**
+   * OHLCV candles for a pool. {@code timeframe} is one of day/hour/minute; {@code aggregate} must be
+   * a value GeckoTerminal supports for that timeframe (day:1, hour:1/4/12, minute:1/5/15).
+   */
+  public List<PriceCandle> fetchOnchainPoolOhlcv(
+      String networkId, String poolAddress, String timeframe, int aggregate, int limit) {
+    if (!isEnabled()
+        || networkId == null
+        || networkId.isBlank()
+        || poolAddress == null
+        || poolAddress.isBlank()) {
+      return List.of();
+    }
+
+    URI uri =
+        UriComponentsBuilder.fromUriString(
+                baseUrl + "/onchain/networks/" + networkId + "/pools/" + poolAddress + "/ohlcv/" + timeframe)
+            .queryParam("aggregate", aggregate)
+            .queryParam("limit", limit)
+            .queryParam("currency", "usd")
+            .queryParam("token", "base")
+            .build(true)
+            .toUri();
+
+    try {
+      JsonNode root =
+          webClient
+              .get()
+              .uri(uri)
+              .headers(h -> {
+                if (!apiKey.isBlank()) h.set("x-cg-pro-api-key", apiKey);
+              })
+              .retrieve()
+              .bodyToMono(JsonNode.class)
+              .timeout(Duration.ofSeconds(20))
+              .block();
+      if (root == null) return List.of();
+      JsonNode list = root.path("data").path("attributes").path("ohlcv_list");
+      if (!list.isArray()) return List.of();
+
+      List<PriceCandle> out = new ArrayList<>();
+      for (JsonNode row : list) {
+        if (!row.isArray() || row.size() < 6) continue;
+        out.add(
+            new PriceCandle(
+                row.get(0).asLong() * 1000L,
+                row.get(1).asDouble(),
+                row.get(2).asDouble(),
+                row.get(3).asDouble(),
+                row.get(4).asDouble(),
+                row.get(5).asDouble(),
+                null));
+      }
+      return out;
+    } catch (Exception e) {
+      log.warn(
+          "CoinGecko onchain OHLCV request failed for networkId='{}' pool='{}' timeframe='{}' uri={}",
+          networkId,
+          poolAddress,
+          timeframe,
+          uri,
+          e);
+      return List.of();
+    }
+  }
+
+  /** Market-wide OHLC candles for a listed coin. No volume data (CoinGecko OHLC limitation). */
+  public List<PriceCandle> fetchCoinOhlc(String coinId, int days) {
+    if (!isEnabled() || coinId == null || coinId.isBlank()) return List.of();
+
+    URI uri =
+        UriComponentsBuilder.fromUriString(baseUrl + "/coins/" + coinId + "/ohlc")
+            .queryParam("vs_currency", "usd")
+            .queryParam("days", days)
+            .build(true)
+            .toUri();
+
+    try {
+      JsonNode root =
+          webClient
+              .get()
+              .uri(uri)
+              .headers(h -> {
+                if (!apiKey.isBlank()) h.set("x-cg-pro-api-key", apiKey);
+              })
+              .retrieve()
+              .bodyToMono(JsonNode.class)
+              .timeout(Duration.ofSeconds(15))
+              .block();
+      if (root == null || !root.isArray()) return List.of();
+
+      List<PriceCandle> out = new ArrayList<>();
+      for (JsonNode row : root) {
+        if (!row.isArray() || row.size() < 5) continue;
+        out.add(
+            new PriceCandle(
+                row.get(0).asLong(),
+                row.get(1).asDouble(),
+                row.get(2).asDouble(),
+                row.get(3).asDouble(),
+                row.get(4).asDouble(),
+                null,
+                null));
+      }
+      return out;
+    } catch (Exception e) {
+      log.warn("CoinGecko OHLC request failed for coinId='{}' days={} uri={}", coinId, days, e);
+      return List.of();
     }
   }
 
