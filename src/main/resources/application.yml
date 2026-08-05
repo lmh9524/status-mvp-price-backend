@@ -13,6 +13,7 @@ app:
   cache:
     priceTtlSeconds: ${PRICE_CACHE_TTL_SECONDS:120}
     requestTtlSeconds: ${REQUEST_CACHE_TTL_SECONDS:30}
+    lastGoodPriceTtlSeconds: ${LAST_GOOD_PRICE_CACHE_TTL_SECONDS:259200}
   marketHistory:
     bucketMinutes: ${MARKET_HISTORY_BUCKET_MINUTES:30}
     searchWindowBuckets: ${MARKET_HISTORY_SEARCH_WINDOW_BUCKETS:4}
@@ -186,10 +187,15 @@ app:
   dex:
     pancake:
       routerAddress: ${PANCAKE_ROUTER_V2_ADDRESS:0x10ED43C718714eb63d5aA57B78B54704E256024E}
+    veil:
+      address: ${VEIL_CONTRACT_ADDRESS:}
     veilx:
       address: ${VEILX_CONTRACT_ADDRESS:}
     usdt:
       address: ${BSC_USDT_CONTRACT_ADDRESS:0x55d398326f99059fF775485246999027B3197955}
+  dexscreener:
+    enabled: ${DEXSCREENER_ENABLED:true}
+    baseUrl: ${DEXSCREENER_BASE_URL:https://api.dexscreener.com}
   coingecko:
     # Additional/override symbol->CoinGecko id mappings.
     # Format: SYMBOL=id,SYMBOL2=id2
