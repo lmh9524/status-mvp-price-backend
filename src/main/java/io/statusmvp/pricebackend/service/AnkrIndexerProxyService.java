@@ -34,7 +34,16 @@ public class AnkrIndexerProxyService {
           "ankr_getTransactionsByAddress");
 
   private static final Set<String> ALLOWED_BLOCKCHAINS =
-      Set.of("eth", "optimism", "bsc", "base", "arbitrum", "eth_sepolia", "bsc_testnet");
+      Set.of(
+          "eth",
+          "optimism",
+          "bsc",
+          "base",
+          "arbitrum",
+          "polygon",
+          "xlayer",
+          "eth_sepolia",
+          "bsc_testnet");
 
   private final WebClient webClient;
   private final String ankrBaseUrl;
