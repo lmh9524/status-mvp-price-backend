@@ -140,6 +140,14 @@ public class PortfolioAggregatorService {
 
   public PortfolioSnapshot getPortfolio(
       String address, List<Integer> requestedChainIds, boolean chainIdsExplicitlyRequested) {
+    return getPortfolio(address, requestedChainIds, chainIdsExplicitlyRequested, false);
+  }
+
+  public PortfolioSnapshot getPortfolio(
+      String address,
+      List<Integer> requestedChainIds,
+      boolean chainIdsExplicitlyRequested,
+      boolean refresh) {
     String normalizedAddress = normalizeAddress(address);
     List<Integer> chainIds = normalizeChainIds(requestedChainIds, !chainIdsExplicitlyRequested);
     long now = Instant.now().toEpochMilli();
@@ -152,12 +160,14 @@ public class PortfolioAggregatorService {
 
     String requestKey = "req:portfolio:" + normalizedAddress + ":" + sha1(joinChainIds(chainIds));
 
-    Optional<String> cached = cache.get(requestKey);
-    if (cached.isPresent()) {
-      try {
-        return mapper.readValue(cached.get(), PortfolioSnapshot.class);
-      } catch (Exception ignored) {
-        // fall through
+    if (!refresh) {
+      Optional<String> cached = cache.get(requestKey);
+      if (cached.isPresent()) {
+        try {
+          return mapper.readValue(cached.get(), PortfolioSnapshot.class);
+        } catch (Exception ignored) {
+          // fall through
+        }
       }
     }
 
@@ -206,6 +216,19 @@ public class PortfolioAggregatorService {
       Boolean includeZero,
       Integer limit,
       boolean chainIdsExplicitlyRequested) {
+    return getPortfolioSnapshotV2(
+        address, requestedChainIds, currency, minUsd, includeZero, limit, chainIdsExplicitlyRequested, false);
+  }
+
+  public PortfolioSnapshotV2 getPortfolioSnapshotV2(
+      String address,
+      List<Integer> requestedChainIds,
+      String currency,
+      Double minUsd,
+      Boolean includeZero,
+      Integer limit,
+      boolean chainIdsExplicitlyRequested,
+      boolean refresh) {
     String normalizedAddress = normalizeAddress(address);
     List<Integer> chainIds = normalizeChainIds(requestedChainIds, !chainIdsExplicitlyRequested);
     String cur = normalizeCurrency(currency);
@@ -230,12 +253,14 @@ public class PortfolioAggregatorService {
             + ":"
             + sha1(joinChainIds(chainIds));
 
-    Optional<String> cached = cache.get(requestKey);
-    if (cached.isPresent()) {
-      try {
-        return mapper.readValue(cached.get(), PortfolioSnapshotV2.class);
-      } catch (Exception ignored) {
-        // fall through
+    if (!refresh) {
+      Optional<String> cached = cache.get(requestKey);
+      if (cached.isPresent()) {
+        try {
+          return mapper.readValue(cached.get(), PortfolioSnapshotV2.class);
+        } catch (Exception ignored) {
+          // fall through
+        }
       }
     }
 

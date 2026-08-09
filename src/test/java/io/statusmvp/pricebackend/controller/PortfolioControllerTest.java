@@ -34,7 +34,8 @@ class PortfolioControllerTest {
                 new PortfolioChainSummary(
                     56, "bsc", "BNB", "1.2", 300.0, 360.0, 12.0, 372.0, 3, 2)));
     given(portfolio.parseChainIds("56,8453")).willReturn(List.of(56, 8453));
-    given(portfolio.getPortfolio(VALID_ADDRESS, List.of(56, 8453), true)).willReturn(snapshot);
+    given(portfolio.getPortfolio(VALID_ADDRESS, List.of(56, 8453), true, true))
+        .willReturn(snapshot);
 
     webTestClient
         .get()
@@ -44,6 +45,7 @@ class PortfolioControllerTest {
                     .path("/api/v1/portfolio")
                     .queryParam("address", VALID_ADDRESS)
                     .queryParam("chainIds", "56,8453")
+                    .queryParam("refresh", "true")
                     .build())
         .exchange()
         .expectStatus()
@@ -57,7 +59,7 @@ class PortfolioControllerTest {
         .isEqualTo(1);
 
     verify(portfolio).parseChainIds("56,8453");
-    verify(portfolio).getPortfolio(VALID_ADDRESS, List.of(56, 8453), true);
+    verify(portfolio).getPortfolio(VALID_ADDRESS, List.of(56, 8453), true, true);
   }
 
   @Test
@@ -68,7 +70,7 @@ class PortfolioControllerTest {
   @Test
   void serviceValidationErrorBubblesAsServerError() {
     given(portfolio.parseChainIds(any())).willReturn(List.of(1));
-    given(portfolio.getPortfolio(eq(VALID_ADDRESS), any(), eq(false)))
+    given(portfolio.getPortfolio(eq(VALID_ADDRESS), any(), eq(false), eq(false)))
         .willThrow(new IllegalArgumentException("address must be a valid EVM address"));
 
     webTestClient
