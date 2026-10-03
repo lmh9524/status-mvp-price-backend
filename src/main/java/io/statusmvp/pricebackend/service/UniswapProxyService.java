@@ -1,7 +1,9 @@
 package io.statusmvp.pricebackend.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.net.SocketException;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
@@ -142,10 +144,40 @@ public class UniswapProxyService {
         .body("{\"error\":\"upstream timeout\"}");
   }
 
-  private static ResponseEntity<String> upstreamUnavailableResponse() {
-    return ResponseEntity.status(502)
-        .contentType(DEFAULT_CONTENT_TYPE)
-        .body("{\"error\":\"upstream unavailable\"}");
+  private static ResponseEntity<String> upstreamErrorResponse(Throwable error) {
+    Throwable classified = null;
+    Throwable root = error;
+    for (Throwable t = error; t != null; t = t.getCause() == t ? null : t.getCause()) {
+      root = t;
+      if (classified == null && isUpstreamConnectivityError(t)) {
+        classified = t;
+      }
+    }
+    Throwable cause = classified != null ? classified : root;
+    if (classified instanceof TimeoutException) {
+      return errorResponse(504, "upstream timeout", null);
+    }
+    if (classified instanceof UnknownHostException) {
+      return errorResponse(502, "upstream dns resolution failed", cause);
+    }
+    if (classified instanceof SocketException) {
+      return errorResponse(502, "upstream connection failed", cause);
+    }
+    return errorResponse(502, "upstream request failed", cause);
+  }
+
+  private static boolean isUpstreamConnectivityError(Throwable t) {
+    return t instanceof TimeoutException
+        || t instanceof UnknownHostException
+        || t instanceof SocketException;
+  }
+
+  private static ResponseEntity<String> errorResponse(int status, String error, Throwable cause) {
+    String body =
+        cause == null
+            ? "{\"error\":\"" + error + "\"}"
+            : "{\"error\":\"" + error + "\",\"cause\":\"" + cause.getClass().getSimpleName() + "\"}";
+    return ResponseEntity.status(status).contentType(DEFAULT_CONTENT_TYPE).body(body);
   }
 
   private URI buildUri(String path) {
@@ -227,7 +259,7 @@ public class UniswapProxyService {
                             normalizedPath,
                             clientIp,
                             e);
-                        return Mono.just(upstreamUnavailableResponse());
+                        return Mono.just(upstreamErrorResponse(e));
                       });
             });
   }

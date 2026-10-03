@@ -1,10 +1,15 @@
 package io.statusmvp.pricebackend.service;
 
 import com.fasterxml.jackson.databind.JsonNode;
+import java.net.SocketException;
 import java.net.URI;
+import java.net.UnknownHostException;
 import java.time.Duration;
 import java.util.Locale;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.http.HttpHeaders;
@@ -21,6 +26,7 @@ import reactor.core.scheduler.Schedulers;
 @Service
 public class JupiterProxyService {
   private static final MediaType DEFAULT_CONTENT_TYPE = MediaType.APPLICATION_JSON;
+  private static final Logger log = LoggerFactory.getLogger(JupiterProxyService.class);
 
   private record RateLimitDecision(boolean allowed, int retryAfterSeconds) {}
 
@@ -117,10 +123,41 @@ public class JupiterProxyService {
         .body("{\"error\":\"rate limited\",\"retryAfterSeconds\":" + retry + "}");
   }
 
-  private static ResponseEntity<String> upstreamTimeoutResponse() {
-    return ResponseEntity.status(504)
-        .contentType(DEFAULT_CONTENT_TYPE)
-        .body("{\"error\":\"upstream timeout\"}");
+  private static ResponseEntity<String> upstreamErrorResponse(Throwable error, String operation) {
+    Throwable classified = null;
+    Throwable root = error;
+    for (Throwable t = error; t != null; t = t.getCause() == t ? null : t.getCause()) {
+      root = t;
+      if (classified == null && isUpstreamConnectivityError(t)) {
+        classified = t;
+      }
+    }
+    Throwable cause = classified != null ? classified : root;
+    log.warn("Jupiter upstream {} request failed", operation, error);
+    if (classified instanceof TimeoutException) {
+      return errorResponse(504, "upstream timeout", null);
+    }
+    if (classified instanceof UnknownHostException) {
+      return errorResponse(502, "upstream dns resolution failed", cause);
+    }
+    if (classified instanceof SocketException) {
+      return errorResponse(502, "upstream connection failed", cause);
+    }
+    return errorResponse(502, "upstream request failed", cause);
+  }
+
+  private static boolean isUpstreamConnectivityError(Throwable t) {
+    return t instanceof TimeoutException
+        || t instanceof UnknownHostException
+        || t instanceof SocketException;
+  }
+
+  private static ResponseEntity<String> errorResponse(int status, String error, Throwable cause) {
+    String body =
+        cause == null
+            ? "{\"error\":\"" + error + "\"}"
+            : "{\"error\":\"" + error + "\",\"cause\":\"" + cause.getClass().getSimpleName() + "\"}";
+    return ResponseEntity.status(status).contentType(DEFAULT_CONTENT_TYPE).body(body);
   }
 
   private URI buildUri(String path, MultiValueMap<String, String> query) {
@@ -148,7 +185,7 @@ public class JupiterProxyService {
                   .uri(uri)
                   .exchangeToMono(JupiterProxyService::toResponseEntity)
                   .timeout(timeout)
-                  .onErrorResume(e -> Mono.just(upstreamTimeoutResponse()));
+                  .onErrorResume(e -> Mono.just(upstreamErrorResponse(e, "quote")));
             });
   }
 
@@ -169,7 +206,7 @@ public class JupiterProxyService {
                   .bodyValue(body == null ? "{}" : body)
                   .exchangeToMono(JupiterProxyService::toResponseEntity)
                   .timeout(timeout)
-                  .onErrorResume(e -> Mono.just(upstreamTimeoutResponse()));
+                  .onErrorResume(e -> Mono.just(upstreamErrorResponse(e, "swap")));
             });
   }
 }
